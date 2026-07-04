@@ -1,8 +1,16 @@
 name: ai-agent-demo-genarator
 slug: ai-agent-demo-genarator
-description: An event-drivenパイプライン that triggers GitHub’s Issue to automatically create PR by specifying the code。
-description_ja: GitHubのIssueをトリガーにAIがコードを修正してPRを自動作成するイベント駆動パイプライン。
+description: Automates GitHub pull request creation by leveraging AI to modify code based on issue triggers, utilizing either Google Cloud or a cost-optimized Cloudflare/local LLM setup.
+description_ja: GitHubのIssueをトリガーにAIがコードを修正し、自動的にプルリクエストを作成するDevOpsパイプライン。Google CloudまたはCloudflareとローカルLLMを用いたコスト効率の良い構成を選択可能。
 translation_locked: false
 status: incubating
-repo: ''
-tags: []
+repo: git@github.com:TakuKobayashi/ai-agent-demo-genarator.git
+tags:
+  - ai
+  - agent
+  - devops
+  - github
+  - cloudflare
+  - googlecloud
+  - typescript
+  - hono
