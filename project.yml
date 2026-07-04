@@ -1,5 +1,5 @@
-name: devops-ai-agent
-slug: devops-ai-agent
+name: ai-agent-demo-genarator
+slug: ai-agent-demo-genarator
 description: An event-drivenパイプライン that triggers GitHub’s Issue to automatically create PR by specifying the code。
 description_ja: GitHubのIssueをトリガーにAIがコードを修正してPRを自動作成するイベント駆動パイプライン。
 translation_locked: false
