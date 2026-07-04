@@ -1,5 +1,5 @@
 {
-  "name": "devops-ai-agent",
+  "name": "ai-agent-demo-genarator",
   "version": "1.0.0",
   "private": true,
   "description": "GitHubのIssueをトリガーにAIがPRを自動作成するDevOpsパイプライン",

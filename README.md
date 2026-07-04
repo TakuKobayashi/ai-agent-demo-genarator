@@ -1,4 +1,4 @@
-# DevOps AI Agent
+# AI Agent Demo Genarator
 
 GitHubのIssueをトリガーにAIがコードを修正してPRを自動作成するイベント駆動パイプライン。
 
