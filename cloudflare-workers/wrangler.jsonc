@@ -1,0 +1,43 @@
+{
+  // Cloudflare Workers 設定ファイル
+  // シークレットは wrangler secret put で設定 (このファイルには書かない)
+  "name": "github-webhook-receiver",
+  "main": "src/index.ts",
+  "compatibility_date": "2024-09-23",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // 環境変数 (公開しても問題ない値のみ)
+  "vars": {
+    // Cloudflare Tunnel 経由のローカルGPUサーバーURL
+    // cloudflared 起動後に発行されるURLを設定
+    // 例: "https://your-tunnel-name.cfargotunnel.com"
+    "LOCAL_WORKER_ENDPOINT": ""
+  },
+
+  // Cloudflare Queues バインディング
+  "queues": {
+    "producers": [
+      {
+        "queue": "github-issues",
+        "binding": "ISSUES_QUEUE"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "github-issues",
+        // 1件ずつ処理
+        "max_batch_size": 1,
+        "max_batch_timeout": 30,
+        // 最大3回リトライ
+        "max_retries": 3,
+        // 失敗メッセージの保存先
+        "dead_letter_queue": "github-issues-dlq"
+      }
+    ]
+  },
+
+  "dev": {
+    "port": 8787,
+    "local_protocol": "http"
+  }
+}

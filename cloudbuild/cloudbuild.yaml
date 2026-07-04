@@ -1,0 +1,152 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# cloudbuild/cloudbuild.yaml
+# Cloud Build CI/CD パイプライン
+#
+# トリガー設定 (Cloud Build コンソールで設定):
+#   - main ブランチへの push → 本番デプロイ
+#   - PR作成時              → ビルド&テストのみ
+#
+# 必要な Cloud Build サービスアカウント権限:
+#   - roles/run.admin
+#   - roles/artifactregistry.writer
+#   - roles/iam.serviceAccountUser
+#   - roles/pubsub.admin
+# ─────────────────────────────────────────────────────────────────────────────
+
+substitutions:
+  _REGION: asia-northeast1
+  _ARTIFACT_REPO: devops-ai-agent
+  _WEBHOOK_SERVICE: github-webhook-receiver
+  _WORKER_SERVICE: adk-agent-worker
+  _PUBSUB_TOPIC: github-issues
+
+steps:
+  # ─── Step 1: 依存関係インストール & 型チェック ─────────────────────────────
+  - id: "install-and-typecheck"
+    name: "node:20-slim"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        npm install -g pnpm
+        pnpm install --frozen-lockfile
+        pnpm --filter ./gcp-webhook install --frozen-lockfile
+        echo "✅ 依存関係インストール完了"
+        pnpm --filter ./gcp-webhook exec tsc --noEmit
+        echo "✅ 型チェック完了"
+
+  # ─── Step 2: Webhookレシーバー Dockerイメージビルド ───────────────────────
+  - id: "build-webhook-image"
+    name: "gcr.io/cloud-builders/docker"
+    args:
+      - build
+      - -f
+      - Dockerfile.webhook
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_ARTIFACT_REPO}/webhook-receiver:$COMMIT_SHA
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_ARTIFACT_REPO}/webhook-receiver:latest
+      - .
+    waitFor: ["install-and-typecheck"]
+
+  # ─── Step 3: Workerイメージビルド ─────────────────────────────────────────
+  - id: "build-worker-image"
+    name: "gcr.io/cloud-builders/docker"
+    args:
+      - build
+      - -f
+      - Dockerfile.worker
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_ARTIFACT_REPO}/adk-agent-worker:$COMMIT_SHA
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_ARTIFACT_REPO}/adk-agent-worker:latest
+      - .
+    waitFor: ["install-and-typecheck"]
+
+  # ─── Step 4: イメージをArtifact Registryにpush ────────────────────────────
+  - id: "push-webhook-image"
+    name: "gcr.io/cloud-builders/docker"
+    args:
+      - push
+      - --all-tags
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_ARTIFACT_REPO}/webhook-receiver
+    waitFor: ["build-webhook-image"]
+
+  - id: "push-worker-image"
+    name: "gcr.io/cloud-builders/docker"
+    args:
+      - push
+      - --all-tags
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_ARTIFACT_REPO}/adk-agent-worker
+    waitFor: ["build-worker-image"]
+
+  # ─── Step 5: WebhookレシーバーをCloud Runにデプロイ ───────────────────────
+  - id: "deploy-webhook"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk:slim"
+    entrypoint: "gcloud"
+    args:
+      - run
+      - deploy
+      - ${_WEBHOOK_SERVICE}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_ARTIFACT_REPO}/webhook-receiver:$COMMIT_SHA
+      - --region=${_REGION}
+      - --platform=managed
+      - --allow-unauthenticated
+      - --set-env-vars=GCP_PROJECT=$PROJECT_ID,PUBSUB_TOPIC=${_PUBSUB_TOPIC}
+      - --memory=512Mi
+      - --cpu=1
+    waitFor: ["push-webhook-image"]
+
+  # ─── Step 6: ADKワーカーをCloud Runにデプロイ ─────────────────────────────
+  - id: "deploy-worker"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk:slim"
+    entrypoint: "gcloud"
+    args:
+      - run
+      - deploy
+      - ${_WORKER_SERVICE}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_ARTIFACT_REPO}/adk-agent-worker:$COMMIT_SHA
+      - --region=${_REGION}
+      - --platform=managed
+      - --no-allow-unauthenticated
+      - --set-env-vars=GCP_PROJECT=$PROJECT_ID,AGENT_MODE=GEMINI_ADK
+      - --memory=2Gi
+      - --cpu=2
+      - --timeout=3600
+      - --concurrency=1
+    waitFor: ["push-worker-image"]
+
+  # ─── Step 7: デプロイ後確認 ───────────────────────────────────────────────
+  - id: "verify-deployment"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk:slim"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        echo "🔍 デプロイ確認中..."
+        WEBHOOK_URL=$(gcloud run services describe ${_WEBHOOK_SERVICE} \
+          --region=${_REGION} --format="value(status.url)")
+        echo "📌 Webhook URL: $${WEBHOOK_URL}/webhook"
+
+        # ヘルスチェック
+        HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$${WEBHOOK_URL}/health")
+        if [ "$${HTTP_STATUS}" = "200" ]; then
+          echo "✅ ヘルスチェック OK (HTTP $${HTTP_STATUS})"
+        else
+          echo "❌ ヘルスチェック失敗 (HTTP $${HTTP_STATUS})"
+          exit 1
+        fi
+    waitFor: ["deploy-webhook", "deploy-worker"]
+
+# ─── ビルドイメージの保存 ────────────────────────────────────────────────────
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_ARTIFACT_REPO}/webhook-receiver:$COMMIT_SHA
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_ARTIFACT_REPO}/webhook-receiver:latest
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_ARTIFACT_REPO}/adk-agent-worker:$COMMIT_SHA
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_ARTIFACT_REPO}/adk-agent-worker:latest
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: "E2_HIGHCPU_8"  # ビルドを並列化するため高スペックマシンを使用
+
+timeout: "1200s"  # 20分

@@ -1,0 +1,168 @@
+version: "3"
+
+vars:
+  GCP_PROJECT: '{{.GCP_PROJECT | default "your-gcp-project-id"}}'
+  GCP_REGION: '{{.GCP_REGION | default "asia-northeast1"}}'
+  # Cloud Run (Webhookレシーバー)
+  GCP_WEBHOOK_SERVICE: '{{.GCP_WEBHOOK_SERVICE | default "github-webhook-receiver"}}'
+  # Cloud Run (ADKエージェントワーカー)
+  GCP_WORKER_SERVICE: '{{.GCP_WORKER_SERVICE | default "adk-agent-worker"}}'
+  # Pub/Sub
+  GCP_PUBSUB_TOPIC: '{{.GCP_PUBSUB_TOPIC | default "github-issues"}}'
+  GCP_PUBSUB_SUBSCRIPTION: '{{.GCP_PUBSUB_SUBSCRIPTION | default "github-issues-worker-sub"}}'
+  # Artifact Registry
+  GCP_ARTIFACT_REPO: '{{.GCP_ARTIFACT_REPO | default "devops-ai-agent"}}'
+  # Docker
+  WEBHOOK_IMAGE: '{{.GCP_REGION}}-docker.pkg.dev/{{.GCP_PROJECT}}/{{.GCP_ARTIFACT_REPO}}/webhook-receiver'
+  WORKER_IMAGE: '{{.GCP_REGION}}-docker.pkg.dev/{{.GCP_PROJECT}}/{{.GCP_ARTIFACT_REPO}}/adk-agent-worker'
+  # Cloudflare (構成B)
+  CF_WORKER_NAME: '{{.CF_WORKER_NAME | default "github-webhook-receiver"}}'
+
+tasks:
+  # ─────────────────────────────────────────────
+  # 共通
+  # ─────────────────────────────────────────────
+  install:
+    desc: 全パッケージの依存関係をインストール
+    cmds:
+      - pnpm install
+      - pnpm --filter ./gcp-webhook install
+      - pnpm --filter ./cloudflare-workers install
+
+  lint:
+    desc: 全パッケージの型チェック
+    cmds:
+      - pnpm --filter ./gcp-webhook exec tsc --noEmit
+      - pnpm --filter ./cloudflare-workers exec tsc --noEmit
+      - tsc --noEmit -p tsconfig.root.json
+
+  # ─────────────────────────────────────────────
+  # Docker: Webhookレシーバー (Cloud Run)
+  # ─────────────────────────────────────────────
+  docker:build:webhook:
+    desc: WebhookレシーバーのDockerイメージをビルド
+    cmds:
+      - docker build -f Dockerfile.webhook -t {{.WEBHOOK_IMAGE}}:latest .
+
+  docker:build:worker:
+    desc: ADKエージェントワーカーのDockerイメージをビルド
+    cmds:
+      - docker build -f Dockerfile.worker -t {{.WORKER_IMAGE}}:latest .
+
+  docker:build:all:
+    desc: 全Dockerイメージをビルド
+    cmds:
+      - task: docker:build:webhook
+      - task: docker:build:worker
+
+  docker:push:all:
+    desc: 全イメージをArtifact Registryにpush
+    deps: [docker:build:all]
+    cmds:
+      - docker push {{.WEBHOOK_IMAGE}}:latest
+      - docker push {{.WORKER_IMAGE}}:latest
+
+  docker:run:worker:local:
+    desc: ワーカーをローカルで実行 (.envから環境変数を読み込み)
+    cmds:
+      - docker run --rm --env-file .env.local {{.WORKER_IMAGE}}:latest
+
+  # ─────────────────────────────────────────────
+  # 構成A: Google Cloud フルネイティブ
+  # ─────────────────────────────────────────────
+  gcp:auth:
+    desc: gcloudとDockerの認証設定
+    cmds:
+      - gcloud auth login
+      - gcloud config set project {{.GCP_PROJECT}}
+      - gcloud auth configure-docker {{.GCP_REGION}}-docker.pkg.dev
+
+  gcp:setup:
+    desc: GCPの初期リソースを一括作成
+    cmds:
+      - tsx scripts/deploy.ts gcp:setup
+        --project {{.GCP_PROJECT}}
+        --region {{.GCP_REGION}}
+        --topic {{.GCP_PUBSUB_TOPIC}}
+        --artifact-repo {{.GCP_ARTIFACT_REPO}}
+
+  gcp:deploy:webhook:
+    desc: WebhookレシーバーをCloud Runにデプロイ
+    deps: [docker:build:webhook]
+    cmds:
+      - docker push {{.WEBHOOK_IMAGE}}:latest
+      - tsx scripts/deploy.ts gcp:deploy-webhook
+        --project {{.GCP_PROJECT}}
+        --region {{.GCP_REGION}}
+        --service {{.GCP_WEBHOOK_SERVICE}}
+        --image {{.WEBHOOK_IMAGE}}:latest
+        --topic {{.GCP_PUBSUB_TOPIC}}
+
+  gcp:deploy:worker:
+    desc: ADKエージェントワーカーをCloud Runにデプロイ
+    deps: [docker:build:worker]
+    cmds:
+      - docker push {{.WORKER_IMAGE}}:latest
+      - tsx scripts/deploy.ts gcp:deploy-worker
+        --project {{.GCP_PROJECT}}
+        --region {{.GCP_REGION}}
+        --service {{.GCP_WORKER_SERVICE}}
+        --image {{.WORKER_IMAGE}}:latest
+        --topic {{.GCP_PUBSUB_TOPIC}}
+        --subscription {{.GCP_PUBSUB_SUBSCRIPTION}}
+
+  gcp:deploy:all:
+    desc: GCP全リソースをセットアップ&デプロイ
+    cmds:
+      - task: gcp:setup
+      - task: gcp:deploy:webhook
+      - task: gcp:deploy:worker
+    summary: |
+      Google Cloud への完全デプロイを実行します。
+      実行後、出力されるWebhook URLをGitHubリポジトリのWebhook設定に登録してください。
+
+  gcp:logs:webhook:
+    desc: WebhookレシーバーのCloud Runログを表示
+    cmds:
+      - gcloud run services logs read {{.GCP_WEBHOOK_SERVICE}} --project={{.GCP_PROJECT}} --region={{.GCP_REGION}} --limit=50
+
+  gcp:logs:worker:
+    desc: ADKワーカーのCloud Runログを表示
+    cmds:
+      - gcloud run services logs read {{.GCP_WORKER_SERVICE}} --project={{.GCP_PROJECT}} --region={{.GCP_REGION}} --limit=50
+
+  gcp:pubsub:publish:test:
+    desc: Pub/Subにテストメッセージを送信 (ローカルデバッグ用)
+    cmds:
+      - |
+        gcloud pubsub topics publish {{.GCP_PUBSUB_TOPIC}} \
+          --project={{.GCP_PROJECT}} \
+          --message='{"issueNumber":1,"issueTitle":"テストIssue","issueBody":"テスト本文","issueAuthor":"test-user","repoFullName":"owner/repo","triggeredAt":"{{now}}"}'
+
+  # ─────────────────────────────────────────────
+  # 構成B: Cloudflare + ローカルLLM
+  # ─────────────────────────────────────────────
+  cf:dev:
+    desc: Cloudflare Workerをローカル開発モードで起動
+    dir: cloudflare-workers
+    cmds:
+      - pnpm wrangler dev
+
+  cf:deploy:
+    desc: Cloudflare Workerをデプロイ
+    cmds:
+      - tsx scripts/deploy.ts cf:deploy
+
+  cf:secret:set:
+    desc: Cloudflare Workerにシークレットを設定
+    dir: cloudflare-workers
+    cmds:
+      - cmd: echo "=== GITHUB_WEBHOOK_SECRET を設定 ===" && pnpm wrangler secret put GITHUB_WEBHOOK_SECRET
+      - cmd: echo "=== GITHUB_TOKEN を設定 ===" && pnpm wrangler secret put GITHUB_TOKEN
+      - cmd: echo "=== LOCAL_WORKER_TOKEN を設定 ===" && pnpm wrangler secret put LOCAL_WORKER_TOKEN
+
+  cf:tail:
+    desc: Cloudflare WorkerのリアルタイムLogを表示
+    dir: cloudflare-workers
+    cmds:
+      - pnpm wrangler tail {{.CF_WORKER_NAME}}

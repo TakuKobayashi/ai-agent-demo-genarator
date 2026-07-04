@@ -1,0 +1,68 @@
+# .github/workflows/issue-to-agent.yml
+#
+# GitHub Issue が opened になったら Cloudflare Workers の
+# Webhook エンドポイントにペイロードを転送するだけのワークフロー。
+#
+# Secrets (GitHub リポジトリの Settings > Secrets に登録):
+#   CF_WEBHOOK_URL    : Cloudflare WorkerのURL (例: https://your-worker.your-subdomain.workers.dev)
+#   CF_WEBHOOK_TOKEN  : Cloudflare Worker側で検証するBearerトークン
+
+name: Issue → AI Agent Pipeline
+
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  dispatch-to-agent:
+    runs-on: ubuntu-latest
+    # ボットが作ったIssueで無限ループしないようにガード
+    if: ${{ !contains(github.event.issue.user.login, '[bot]') }}
+
+    steps:
+      - name: Dispatch Issue to Cloudflare Worker
+        env:
+          CF_WEBHOOK_URL: ${{ secrets.CF_WEBHOOK_URL }}
+          CF_WEBHOOK_TOKEN: ${{ secrets.CF_WEBHOOK_TOKEN }}
+        run: |
+          # Issue の情報を JSON に組み立てて Cloudflare Worker に POST
+          PAYLOAD=$(jq -n \
+            --arg action "opened" \
+            --argjson issue_number "${{ github.event.issue.number }}" \
+            --arg issue_title "${{ github.event.issue.title }}" \
+            --arg issue_body "${{ github.event.issue.body }}" \
+            --arg issue_author "${{ github.event.issue.user.login }}" \
+            --arg issue_url "${{ github.event.issue.html_url }}" \
+            --arg repo_full_name "${{ github.repository }}" \
+            --arg default_branch "${{ github.event.repository.default_branch }}" \
+            --arg triggered_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{
+              action: $action,
+              issueNumber: $issue_number,
+              issueTitle: $issue_title,
+              issueBody: $issue_body,
+              issueAuthor: $issue_author,
+              issueUrl: $issue_url,
+              repoFullName: $repo_full_name,
+              defaultBranch: $default_branch,
+              triggeredAt: $triggered_at
+            }')
+
+          echo "📤 Cloudflare Worker にディスパッチ中..."
+          echo "   Issue #${{ github.event.issue.number }}: ${{ github.event.issue.title }}"
+
+          HTTP_STATUS=$(curl -s -o /tmp/cf_response.json -w "%{http_code}" \
+            -X POST "${CF_WEBHOOK_URL}/dispatch" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${CF_WEBHOOK_TOKEN}" \
+            -d "${PAYLOAD}")
+
+          echo "   HTTP Status: ${HTTP_STATUS}"
+          cat /tmp/cf_response.json
+
+          if [ "${HTTP_STATUS}" != "200" ] && [ "${HTTP_STATUS}" != "202" ]; then
+            echo "❌ ディスパッチ失敗 (HTTP ${HTTP_STATUS})"
+            exit 1
+          fi
+
+          echo "✅ ディスパッチ完了"

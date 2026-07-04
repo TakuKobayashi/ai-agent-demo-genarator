@@ -1,0 +1,41 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# cloudbuild/cloudbuild.pr.yaml
+# PRレビュー用パイプライン (ビルド & 型チェックのみ / デプロイなし)
+# ─────────────────────────────────────────────────────────────────────────────
+
+steps:
+  - id: "install"
+    name: "node:20-slim"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        npm install -g pnpm
+        pnpm install --frozen-lockfile
+        pnpm --filter ./gcp-webhook install --frozen-lockfile
+
+  - id: "typecheck"
+    name: "node:20-slim"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        npm install -g pnpm
+        pnpm --filter ./gcp-webhook exec tsc --noEmit
+        echo "✅ 型チェック OK"
+    waitFor: ["install"]
+
+  - id: "build-images-dry-run"
+    name: "gcr.io/cloud-builders/docker"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        docker build -f Dockerfile.webhook --target builder . && echo "✅ webhook image build OK"
+        docker build -f Dockerfile.worker --target base . && echo "✅ worker image build OK"
+    waitFor: ["typecheck"]
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: "600s"

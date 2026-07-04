@@ -1,0 +1,21 @@
+{
+  "name": "devops-ai-agent",
+  "version": "1.0.0",
+  "private": true,
+  "description": "GitHubのIssueをトリガーにAIがPRを自動作成するDevOpsパイプライン",
+  "scripts": {
+    "deploy:gcp": "tsx scripts/deploy.ts gcp:deploy-all",
+    "deploy:cf": "tsx scripts/deploy.ts cf:deploy"
+  },
+  "dependencies": {
+    "@google-cloud/secret-manager": "^5.5.0",
+    "@hono/node-server": "^1.12.0",
+    "hono": "^4.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "commander": "^12.1.0",
+    "tsx": "^4.15.0",
+    "typescript": "^5.5.0"
+  }
+}
