@@ -28,12 +28,14 @@ tasks:
       - pnpm install
       - pnpm --filter ./gcp-webhook install
       - pnpm --filter ./cloudflare-workers install
+      - pnpm --filter ./local-worker install
 
   lint:
     desc: 全パッケージの型チェック
     cmds:
       - pnpm --filter ./gcp-webhook exec tsc --noEmit
       - pnpm --filter ./cloudflare-workers exec tsc --noEmit
+      - pnpm --filter ./local-worker exec tsc --noEmit
       - tsc --noEmit -p tsconfig.root.json
 
   # ─────────────────────────────────────────────

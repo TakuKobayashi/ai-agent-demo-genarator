@@ -7,3 +7,4 @@ packages:
   # すべてのサブディレクトリをワークスペースとして含める場合
   - 'gcp-webhook'
   - 'cloudflare-workers'
+  - 'local-worker'

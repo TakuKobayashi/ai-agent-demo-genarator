@@ -35,7 +35,7 @@ import type { IssueQueueMessage } from "../../cloudflare-workers/src/index.js";
 
 // ─── 設定 ─────────────────────────────────────────────────────────────────────
 
-const PORT = Number(process.env["PORT"] ?? 3000);
+const PORT = Number(process.env["PORT"] ?? 3434);
 const LOCAL_WORKER_TOKEN = process.env["LOCAL_WORKER_TOKEN"] ?? "";
 const GITHUB_TOKEN = process.env["GITHUB_TOKEN"] ?? "";
 const AIDER_MODEL = process.env["AIDER_MODEL"] ?? "qwen2.5-coder:32b";

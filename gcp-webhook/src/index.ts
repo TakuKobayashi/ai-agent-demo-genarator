@@ -188,7 +188,7 @@ app.post("/webhook", async (c) => {
 
 // ─── サーバー起動 ─────────────────────────────────────────────────────────────
 
-const port = Number(process.env["PORT"] ?? 8080);
+const port = Number(process.env["PORT"] ?? 8787);
 console.log(`🚀 Webhookレシーバー起動 port=${port}`);
 serve({ fetch: app.fetch, port });
 
