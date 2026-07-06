@@ -1,3 +1,9 @@
 allowBuilds:
   esbuild: false
   protobufjs: false
+  sharp: false
+  workerd: false
+packages:
+  # すべてのサブディレクトリをワークスペースとして含める場合
+  - 'gcp-webhook'
+  - 'cloudflare-workers'
