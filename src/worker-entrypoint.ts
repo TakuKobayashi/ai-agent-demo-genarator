@@ -519,7 +519,7 @@ const isHTTPMode = process.env["PORT"] !== undefined || process.env["HTTP_MODE"]
 
 if (isHTTPMode) {
   // Cloud Run: HTTPサーバーとして起動
-  const port = Number(process.env["PORT"] ?? 8080);
+  const port = Number(process.env["PORT"] ?? 8091);
   console.log(`🚀 Worker HTTPサーバー起動 port=${port}`);
   serve({ fetch: httpApp.fetch, port });
 } else {

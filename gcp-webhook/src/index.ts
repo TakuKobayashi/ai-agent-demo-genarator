@@ -11,7 +11,7 @@
  * 環境変数:
  *   GCP_PROJECT           - GCPプロジェクトID
  *   PUBSUB_TOPIC          - Pub/Subトピック名
- *   PORT                  - リッスンポート (デフォルト: 8080)
+ *   PORT                  - リッスンポート (デフォルト: 8090)
  *
  * Secret Manager (最新バージョンを自動取得):
  *   GITHUB_WEBHOOK_SECRET - GitHub Webhookシークレット
@@ -201,7 +201,7 @@ app.post("/webhook", async (c) => {
 
 // ─── サーバー起動 ─────────────────────────────────────────────────────────────
 
-const port = Number(process.env["PORT"] ?? 8787);
+const port = Number(process.env["PORT"] ?? 8090);
 console.log(`🚀 Webhookレシーバー起動 port=${port}`);
 serve({ fetch: app.fetch, port });
 

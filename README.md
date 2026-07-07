@@ -130,9 +130,9 @@ task test:cf:dispatch -- --issue-number 1
 # ① 各サービスを起動 (別ポートで独立起動)
 docker compose -f docker-compose.dev.gcp.yml up
 #   8085 : pubsub-emulator   (Pub/Sub エミュレータ)
-#   8080 : gcp-webhook-dev   (Cloud Run Webhookレシーバー ローカルサーバー)
-#   8086 : gcp-pubsub-relay  (Pull→Push配信ブリッジ / ヘルスチェック用)
-#   8081 : adk-worker-dev    (ADKエージェントワーカー ローカルサーバー)
+#   8090 : gcp-webhook-dev   (Cloud Run Webhookレシーバー ローカルサーバー)
+#   8091 : adk-worker-dev    (ADKエージェントワーカー ローカルサーバー)
+#   8092 : gcp-pubsub-relay  (Pull→Push配信ブリッジ / ヘルスチェック用)
 
 # ② 別ターミナルでダミーリクエストを送信 (署名は自動計算される)
 tsx local-test/src/test-gcp-flow.ts webhook --issue-number 1 --title "テストIssue"

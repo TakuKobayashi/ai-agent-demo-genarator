@@ -23,9 +23,9 @@
  *
  * docker-compose.dev.gcp.yml で起動したサービスに対して送信する想定:
  *   pubsub-emulator  : localhost:8085        (Pub/Sub エミュレータ)
- *   gcp-webhook-dev  : http://localhost:8080 (Cloud Run Webhookレシーバー ローカルサーバー)
- *   gcp-pubsub-relay : http://localhost:8086 (Push配信ブリッジ / ヘルスチェック用)
- *   adk-worker-dev   : http://localhost:8081 (ADKエージェントワーカー ローカルサーバー)
+ *   gcp-webhook-dev  : http://localhost:8090 (Cloud Run Webhookレシーバー ローカルサーバー)
+ *   gcp-pubsub-relay : http://localhost:8092 (Push配信ブリッジ / ヘルスチェック用)
+ *   adk-worker-dev   : http://localhost:8091 (ADKエージェントワーカー ローカルサーバー)
  */
 
 import { Command } from "commander";
@@ -88,7 +88,7 @@ addCommonIssueOptions(
     .command("webhook")
     .description("GitHubのIssue Webhookをシミュレートし、署名付きでgcp-webhookの /webhook へ送信する")
 )
-  .option("--url <url>", "gcp-webhookのURL", "http://localhost:8080")
+  .option("--url <url>", "gcp-webhookのURL", "http://localhost:8090")
   .option("--secret <secret>", "GITHUB_WEBHOOK_SECRET", "local-dev-webhook-secret")
   .action(async (opts: CommonIssueOpts & { url: string; secret: string }) => {
     const payload = buildGithubWebhookPayload(toDummyIssueOptions(opts));
@@ -173,7 +173,7 @@ addCommonIssueOptions(
       "ADKワーカー (adk-worker-dev) の /worker に、本番のPub/Sub Push形式そのままで直接送信する (Pub/Subをスキップして疎通確認)"
     )
 )
-  .option("--url <url>", "adk-worker-devのURL", "http://localhost:8081")
+  .option("--url <url>", "adk-worker-devのURL", "http://localhost:8091")
   .option("--project <project>", "GCPプロジェクトID", "local-dev-project")
   .action(async (opts: CommonIssueOpts & { url: string; project: string }) => {
     const envelope = buildPubSubPushEnvelope(toDummyIssueOptions(opts), opts.project);
@@ -199,7 +199,7 @@ addCommonIssueOptions(
       "GitHub Webhook → gcp-webhook → Pub/Sub → gcp-pubsub-relay → ADKワーカー を一気通貫でテストする (webhookのみ叩き、以降は自動連携を待つ)"
     )
 )
-  .option("--url <url>", "gcp-webhookのURL", "http://localhost:8080")
+  .option("--url <url>", "gcp-webhookのURL", "http://localhost:8090")
   .option("--secret <secret>", "GITHUB_WEBHOOK_SECRET", "local-dev-webhook-secret")
   .action(async (opts: CommonIssueOpts & { url: string; secret: string }) => {
     const payload = buildGithubWebhookPayload(toDummyIssueOptions(opts));

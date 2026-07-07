@@ -29,9 +29,11 @@
 #
 # ポート割り当て:
 #   8085 : pubsub-emulator   (Pub/Sub エミュレータ)
-#   8080 : gcp-webhook-dev   (Cloud Run Webhookレシーバー ローカルサーバー)
-#   8086 : gcp-pubsub-relay  (Pull→Push配信ブリッジ / ヘルスチェック用)
-#   8081 : adk-worker-dev    (ADKエージェントワーカー ローカルサーバー)
+#   8090 : gcp-webhook-dev   (Cloud Run Webhookレシーバー ローカルサーバー)
+#   8091 : adk-worker-dev    (ADKエージェントワーカー ローカルサーバー)
+#   8092 : gcp-pubsub-relay  (Pull→Push配信ブリッジ / ヘルスチェック用)
+#
+# ※ 3000 / 8080 / 8888 はよく使われる開発用ポートのため意図的に避けている
 
 services:
   # ─── ① Pub/Sub エミュレータ (Cloudflare Queues 相当) ─────────────────────
@@ -59,9 +61,9 @@ services:
       - ./gcp-webhook:/app/gcp-webhook
       - gcp_webhook_node_modules:/app/gcp-webhook/node_modules
     ports:
-      - "8080:8080"
+      - "8090:8090"
     environment:
-      PORT: "8080"
+      PORT: "8090"
       GCP_PROJECT: local-dev-project
       PUBSUB_TOPIC: github-issues
       PUBSUB_EMULATOR_HOST: pubsub-emulator:8085
@@ -83,14 +85,14 @@ services:
       - ./local-dev/gcp-pubsub-relay:/app/local-dev/gcp-pubsub-relay
       - gcp_pubsub_relay_node_modules:/app/local-dev/gcp-pubsub-relay/node_modules
     ports:
-      - "8086:8086"
+      - "8092:8092"
     environment:
-      PORT: "8086"
+      PORT: "8092"
       GCP_PROJECT: local-dev-project
       PUBSUB_TOPIC: github-issues
       PUBSUB_SUBSCRIPTION: github-issues-worker-sub
       PUBSUB_EMULATOR_HOST: pubsub-emulator:8085
-      ADK_WORKER_ENDPOINT: http://adk-worker-dev:8081
+      ADK_WORKER_ENDPOINT: http://adk-worker-dev:8091
     command: sh -c "npm install -g pnpm tsx && pnpm install && pnpm start"
     depends_on:
       pubsub-emulator:
@@ -110,9 +112,9 @@ services:
       - ./tsconfig.worker.json:/app/tsconfig.worker.json
       - adk_worker_node_modules:/app/node_modules
     ports:
-      - "8081:8081"
+      - "8091:8091"
     environment:
-      PORT: "8081"
+      PORT: "8091"
       HTTP_MODE: "true"
       AGENT_MODE: GEMINI_ADK
       GCP_PROJECT: local-dev-project

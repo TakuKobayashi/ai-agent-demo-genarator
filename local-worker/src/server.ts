@@ -9,14 +9,14 @@
  * 起動方法:
  *   tsx local-worker/src/server.ts
  *   または
- *   docker run --rm --env-file .env.local -p 3000:3000 adk-agent-worker:latest
+ *   docker run --rm --env-file .env.local -p 3434:3434 adk-agent-worker:latest
  *
  * Cloudflare Tunnel のセットアップ:
- *   cloudflared tunnel --url http://localhost:3000
+ *   cloudflared tunnel --url http://localhost:3434
  *   → 発行されたURLを Cloudflare Workers の LOCAL_WORKER_ENDPOINT に設定
  *
  * 環境変数:
- *   PORT               - リッスンポート (デフォルト: 3000)
+ *   PORT               - リッスンポート (デフォルト: 3434)
  *   LOCAL_WORKER_TOKEN - Cloudflare Workerと共有する認証トークン
  *   GITHUB_TOKEN       - GitHub PAT (DRY_RUN=true の場合は不要)
  *   AIDER_MODEL        - 使用モデル (デフォルト: qwen2.5-coder:32b)
