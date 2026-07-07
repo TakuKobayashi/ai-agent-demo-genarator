@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "tsx src/server.ts",
-    "dev": "tsx watch src/server.ts"
+    "dev": "tsx watch src/server.ts",
+    "start:dry-run": "cross-env PORT=3434 LOCAL_WORKER_TOKEN=local-dev-worker-token GITHUB_TOKEN=dummy-token-not-used-in-dry-run DRY_RUN=true tsx src/server.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.12.0",
@@ -13,6 +14,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
+    "cross-env": "^7.0.3",
     "tsx": "^4.15.0",
     "typescript": "^5.5.0"
   }

@@ -229,4 +229,10 @@ addCommonIssueOptions(
 `);
   });
 
-program.parseAsync(process.argv);
+// `pnpm run <script> -- --foo bar` のように実行すると、pnpm/npm が argv に
+// リテラルな "--" を挿入する。Commanderはこれを「オプション終端」とみなし、
+// 以降のフラグを位置引数として扱ってしまう (=フラグが無視される) ため、
+// パース前に取り除いておく。直接 `tsx ...` で実行した場合は影響しない。
+const argv = process.argv.filter((arg) => arg !== "--");
+
+program.parseAsync(argv);

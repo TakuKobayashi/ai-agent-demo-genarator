@@ -6,7 +6,15 @@
   "description": "ローカル動作確認用のcommander CLIスクリプト集",
   "scripts": {
     "test:cf": "tsx src/test-cloudflare-flow.ts",
-    "test:gcp": "tsx src/test-gcp-flow.ts"
+    "test:cf:dispatch": "tsx src/test-cloudflare-flow.ts dispatch",
+    "test:cf:queue": "tsx src/test-cloudflare-flow.ts queue",
+    "test:cf:worker": "tsx src/test-cloudflare-flow.ts worker",
+    "test:cf:e2e": "tsx src/test-cloudflare-flow.ts e2e",
+    "test:gcp": "tsx src/test-gcp-flow.ts",
+    "test:gcp:webhook": "tsx src/test-gcp-flow.ts webhook",
+    "test:gcp:pubsub": "tsx src/test-gcp-flow.ts pubsub",
+    "test:gcp:worker": "tsx src/test-gcp-flow.ts worker",
+    "test:gcp:e2e": "tsx src/test-gcp-flow.ts e2e"
   },
   "dependencies": {
     "@google-cloud/pubsub": "^4.5.0",

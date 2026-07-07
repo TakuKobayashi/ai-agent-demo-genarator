@@ -20,12 +20,12 @@
  * を行うことで、ローカルでも本番と全く同じ Push 配信フローを再現する。
  *
  * 環境変数:
- *   PORT                    - ヘルスチェック用リッスンポート (デフォルト: 8086)
+ *   PORT                    - ヘルスチェック用リッスンポート (デフォルト: 8092)
  *   PUBSUB_EMULATOR_HOST    - Pub/Subエミュレータのホスト:ポート (デフォルト: localhost:8085)
  *   GCP_PROJECT             - GCPプロジェクトID (エミュレータ用の任意のID可)
  *   PUBSUB_TOPIC            - トピック名 (デフォルト: github-issues)
  *   PUBSUB_SUBSCRIPTION     - サブスクリプション名 (デフォルト: github-issues-worker-sub)
- *   ADK_WORKER_ENDPOINT     - ADKワーカーのURL (デフォルト: http://localhost:8081)
+ *   ADK_WORKER_ENDPOINT     - ADKワーカーのURL (デフォルト: http://localhost:8091)
  */
 
 import { serve } from "@hono/node-server";
@@ -34,11 +34,11 @@ import { PubSub, type Message } from "@google-cloud/pubsub";
 
 // ─── 設定 ─────────────────────────────────────────────────────────────────────
 
-const PORT = Number(process.env["PORT"] ?? 8086);
+const PORT = Number(process.env["PORT"] ?? 8092);
 const GCP_PROJECT = process.env["GCP_PROJECT"] ?? "local-dev-project";
 const PUBSUB_TOPIC = process.env["PUBSUB_TOPIC"] ?? "github-issues";
 const PUBSUB_SUBSCRIPTION = process.env["PUBSUB_SUBSCRIPTION"] ?? "github-issues-worker-sub";
-const ADK_WORKER_ENDPOINT = process.env["ADK_WORKER_ENDPOINT"] ?? "http://localhost:8081";
+const ADK_WORKER_ENDPOINT = process.env["ADK_WORKER_ENDPOINT"] ?? "http://localhost:8091";
 
 // PUBSUB_EMULATOR_HOST が設定されていれば @google-cloud/pubsub は自動でエミュレータに接続する
 if (!process.env["PUBSUB_EMULATOR_HOST"]) {
