@@ -1,0 +1,96 @@
+# docker-compose.dev.cloudflare.yml
+#
+# 構成B (GitHub Actions → Cloudflare Workers → Cloudflare Queues → 自前GPUワーカー)
+# のローカル開発・動作確認環境。
+#
+# 各サービスが別ポートで独立起動するため、パイプラインの各ホップを
+# 個別に確認したり、local-test/ のスクリプトでダミーリクエストを送って
+# 動作確認することができる。
+#
+# 使い方:
+#   docker compose -f docker-compose.dev.cloudflare.yml up
+#
+#   (別ターミナルで)
+#   tsx local-test/src/test-cloudflare-flow.ts dispatch --issue-number 1
+#   tsx local-test/src/test-cloudflare-flow.ts queue     --issue-number 2
+#   tsx local-test/src/test-cloudflare-flow.ts worker    --issue-number 3
+#   tsx local-test/src/test-cloudflare-flow.ts e2e       --issue-number 4
+#
+# デフォルトで DRY_RUN=true になっているため、実際のGit操作・GitHub PR作成・
+# Ollama/Aiderの実行は行われず、HTTP層の疎通確認のみが行われる。
+# 実際にAiderでコード修正まで確認したい場合は、local-gpu-worker の
+# DRY_RUN を false にし、別途 docker-compose.local.yml の Ollama を起動すること。
+#
+# ポート割り当て:
+#   8787 : cf-worker-dev    (Cloudflare Workers ローカルサーバー / wrangler dev)
+#   8788 : cf-queue-mock    (Cloudflare Queues モックサーバー ※ローカル開発専用)
+#   3434 : local-gpu-worker (自前GPUサーバー HTTPサーバー / Hono)
+
+services:
+  # ─── ① Cloudflare Workers ローカルサーバー (wrangler dev) ────────────────
+  cf-worker-dev:
+    image: node:20-slim
+    container_name: cf-worker-dev
+    working_dir: /app/cloudflare-workers
+    volumes:
+      - ./cloudflare-workers:/app/cloudflare-workers
+      - cf_worker_node_modules:/app/cloudflare-workers/node_modules
+    ports:
+      - "8787:8787"
+    command: >
+      sh -c "npm install -g pnpm &&
+             pnpm install &&
+             pnpm exec wrangler dev --host 0.0.0.0 --port 8787"
+    depends_on:
+      - local-gpu-worker
+
+  # ─── ② Cloudflare Queues モックサーバー (ローカル開発専用) ────────────────
+  # 本番では wrangler の queue バインディングが自動的にキューイングするが、
+  # このモックは Queue → GPUワーカー転送のロジックを独立して確認するためのもの
+  cf-queue-mock:
+    image: node:20-slim
+    container_name: cf-queue-mock
+    working_dir: /app/local-dev/cf-queue-mock
+    volumes:
+      - ./local-dev/cf-queue-mock:/app/local-dev/cf-queue-mock
+      - cf_queue_mock_node_modules:/app/local-dev/cf-queue-mock/node_modules
+    ports:
+      - "8788:8788"
+    environment:
+      PORT: "8788"
+      LOCAL_WORKER_ENDPOINT: http://local-gpu-worker:3434
+      LOCAL_WORKER_TOKEN: local-dev-worker-token
+    command: sh -c "npm install -g pnpm tsx && pnpm install && pnpm start"
+    depends_on:
+      - local-gpu-worker
+
+  # ─── ③ 自前GPUサーバー HTTPサーバー (Hono / Aider + Ollama) ───────────────
+  local-gpu-worker:
+    image: node:20-slim
+    container_name: local-gpu-worker
+    working_dir: /app/local-worker
+    volumes:
+      - ./local-worker:/app/local-worker
+      - local_worker_node_modules:/app/local-worker/node_modules
+    ports:
+      - "3434:3434"
+    environment:
+      PORT: "3434"
+      LOCAL_WORKER_TOKEN: local-dev-worker-token
+      GITHUB_TOKEN: dummy-token-not-used-in-dry-run
+      AIDER_MODEL: qwen2.5-coder:32b
+      OLLAMA_API_BASE: http://host.docker.internal:11434/v1
+      MAX_CONCURRENT: "1"
+      # true: git操作・Aider実行を全てスキップしHTTP層の疎通のみ確認 (デフォルト)
+      # false: 実際にgit clone/push/PR作成・Aiderを実行 (GITHUB_TOKENとOllamaが必要)
+      DRY_RUN: "true"
+    extra_hosts:
+      # Linux の Docker Engine では host.docker.internal が自動解決されないため明示指定
+      # (Docker Desktop for Mac/Windows では不要だが害もないため常に付与)
+      - "host.docker.internal:host-gateway"
+    command: sh -c "npm install -g pnpm tsx && pnpm install && pnpm start"
+
+volumes:
+  cf_worker_node_modules:
+  cf_queue_mock_node_modules:
+  local_worker_node_modules:

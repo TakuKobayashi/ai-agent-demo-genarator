@@ -52,6 +52,7 @@ interface WorkerConfig {
   issueBody: string;
   issueAuthor: string;
   defaultBranch: string;
+  dryRun: boolean;
 }
 
 // ─── ユーティリティ ───────────────────────────────────────────────────────────
@@ -121,6 +122,7 @@ function buildConfig(msg?: IssueQueueMessage): WorkerConfig {
     issueBody: msg?.issueBody ?? (process.env["ISSUE_BODY"] ?? ""),
     issueAuthor: msg?.issueAuthor ?? (process.env["ISSUE_AUTHOR"] ?? "unknown"),
     defaultBranch: msg?.defaultBranch ?? (process.env["DEFAULT_BRANCH"] ?? "main"),
+    dryRun: process.env["DRY_RUN"] === "true",
   };
 }
 
@@ -402,16 +404,38 @@ function runAider(cfg: WorkerConfig, repoDir: string): void {
 async function processIssue(msg?: IssueQueueMessage): Promise<void> {
   const cfg = buildConfig(msg);
 
-  // GitHub Tokenの解決 (Secret Manager or 環境変数)
-  if (!cfg.githubToken) {
-    cfg.githubToken = await resolveGithubToken();
-  }
-
-  console.log(`\n📋 処理開始`);
+  console.log(`\n📋 処理開始${cfg.dryRun ? " [DRY_RUN]" : ""}`);
   console.log(`  リポジトリ : ${cfg.githubRepo}`);
   console.log(`  Issue      : #${cfg.issueNumber} "${cfg.issueTitle}"`);
   console.log(`  エージェント: ${cfg.agentMode}`);
   console.log(`  開始時刻   : ${new Date().toISOString()}`);
+
+  if (cfg.dryRun) {
+    // ── DRY_RUN: 実際のGCP認証・git操作・エージェント実行を一切行わず、
+    //    HTTPリクエストの受信〜設定の組み立てまでの疎通確認のみ行う ──────────
+    const branch = `demo/issue-${cfg.issueNumber}`;
+    console.log(`🧪 [DRY_RUN] GitHub Token解決 (Secret Manager) をスキップ`);
+    console.log(`🧪 [DRY_RUN] git clone をスキップ (対象: ${cfg.githubRepo})`);
+    console.log(`🧪 [DRY_RUN] ブランチ作成をスキップ: ${branch}`);
+    switch (cfg.agentMode) {
+      case "GEMINI_ADK":
+        console.log(`🧪 [DRY_RUN] Gemini ADK エージェント実行をスキップ (モデル: ${cfg.geminiModel})`);
+        break;
+      case "LOCAL_AIDER":
+        console.log(`🧪 [DRY_RUN] Aider エージェント実行をスキップ (モデル: ${cfg.aiderModel})`);
+        break;
+    }
+    console.log(`   プロンプト:\n${buildPrompt(cfg)}`);
+    console.log(`🧪 [DRY_RUN] git push をスキップ`);
+    console.log(`🧪 [DRY_RUN] gh pr create をスキップ`);
+    console.log(`\n✅ [DRY_RUN] 処理完了 (実際の変更は行われていません): ${new Date().toISOString()}`);
+    return;
+  }
+
+  // GitHub Tokenの解決 (Secret Manager or 環境変数)
+  if (!cfg.githubToken) {
+    cfg.githubToken = await resolveGithubToken();
+  }
 
   const { repoDir, workDir } = setupRepo(cfg);
 
@@ -448,7 +472,13 @@ async function processIssue(msg?: IssueQueueMessage): Promise<void> {
 const httpApp = new Hono();
 httpApp.use("*", logger());
 
-httpApp.get("/health", (c) => c.json({ status: "healthy", mode: process.env["AGENT_MODE"] }));
+httpApp.get("/health", (c) =>
+  c.json({
+    status: "healthy",
+    mode: process.env["AGENT_MODE"],
+    dryRun: process.env["DRY_RUN"] === "true",
+  })
+);
 
 httpApp.post("/worker", async (c) => {
   // Pub/Sub Push形式のデコード
@@ -475,7 +505,9 @@ httpApp.post("/worker", async (c) => {
   console.log(`📬 Pub/Subメッセージ受信: Issue #${queueMsg.issueNumber}`);
 
   // 非同期で処理 (Cloud RunのHTTPタイムアウトを回避するため即座に202を返す)
-  c.executionCtx?.waitUntil?.(processIssue(queueMsg).catch(console.error));
+  // 注意: @hono/node-server (Node.js/Cloud Run) には Cloudflare Workers の
+  // executionCtx.waitUntil() に相当する仕組みがないため、単純にawaitせず
+  // 非同期関数を発火するだけにとどめる。
   processIssue(queueMsg).catch(console.error);
 
   return c.json({ accepted: true, issueNumber: queueMsg.issueNumber }, 202);

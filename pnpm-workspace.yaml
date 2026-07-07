@@ -8,3 +8,7 @@ packages:
   - 'gcp-webhook'
   - 'cloudflare-workers'
   - 'local-worker'
+  # ローカル動作確認用 (docker-compose.dev.*.yml / local-test スクリプトから使用)
+  - 'local-dev/cf-queue-mock'
+  - 'local-dev/gcp-pubsub-relay'
+  - 'local-test'

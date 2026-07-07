@@ -18,10 +18,13 @@
  * 環境変数:
  *   PORT               - リッスンポート (デフォルト: 3000)
  *   LOCAL_WORKER_TOKEN - Cloudflare Workerと共有する認証トークン
- *   GITHUB_TOKEN       - GitHub PAT
+ *   GITHUB_TOKEN       - GitHub PAT (DRY_RUN=true の場合は不要)
  *   AIDER_MODEL        - 使用モデル (デフォルト: qwen2.5-coder:32b)
  *   OLLAMA_API_BASE    - OllamaエンドポイントURL (デフォルト: http://localhost:11434/v1)
  *   MAX_CONCURRENT     - 同時実行数 (デフォルト: 1)
+ *   DRY_RUN            - "true" の場合、実際の git clone/push/PR作成・Aider実行を
+ *                        すべてスキップし、ログ出力のみで処理をシミュレートする。
+ *                        ローカルでの疎通確認 (HTTP層・認証・Queueリレー) に使用する。
  */
 
 import { serve } from "@hono/node-server";
@@ -31,7 +34,22 @@ import { execSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { IssueQueueMessage } from "../../cloudflare-workers/src/index.js";
+
+// ─── Queueメッセージ型 (Cloudflare Queues / Pub/Sub 共通スキーマ) ────────────
+// cloudflare-workers 側の型定義と構造は同一だが、あちら側は
+// @cloudflare/workers-types (Queue/MessageBatch等のワーカー専用アンビエント型)
+// に依存しているため、Node.js環境で動くこちらのパッケージでは
+// 密結合を避けるためにあえて同一形状の型をこちらにも定義している。
+interface IssueQueueMessage {
+  issueNumber: number;
+  issueTitle: string;
+  issueBody: string;
+  issueAuthor: string;
+  issueUrl: string;
+  repoFullName: string;
+  defaultBranch: string;
+  triggeredAt: string;
+}
 
 // ─── 設定 ─────────────────────────────────────────────────────────────────────
 
@@ -41,13 +59,14 @@ const GITHUB_TOKEN = process.env["GITHUB_TOKEN"] ?? "";
 const AIDER_MODEL = process.env["AIDER_MODEL"] ?? "qwen2.5-coder:32b";
 const OLLAMA_API_BASE = process.env["OLLAMA_API_BASE"] ?? "http://localhost:11434/v1";
 const MAX_CONCURRENT = Number(process.env["MAX_CONCURRENT"] ?? 1);
+const DRY_RUN = process.env["DRY_RUN"] === "true";
 
 if (!LOCAL_WORKER_TOKEN) {
   console.error("❌ LOCAL_WORKER_TOKEN が未設定です");
   process.exit(1);
 }
-if (!GITHUB_TOKEN) {
-  console.error("❌ GITHUB_TOKEN が未設定です");
+if (!GITHUB_TOKEN && !DRY_RUN) {
+  console.error("❌ GITHUB_TOKEN が未設定です (DRY_RUN=true にすれば不要です)");
   process.exit(1);
 }
 
@@ -90,12 +109,26 @@ async function runAgentPipeline(msg: IssueQueueMessage): Promise<void> {
   } = msg;
 
   console.log(`\n${"═".repeat(60)}`);
-  console.log(`🚀 エージェントパイプライン開始`);
+  console.log(`🚀 エージェントパイプライン開始${DRY_RUN ? " [DRY_RUN]" : ""}`);
   console.log(`   リポジトリ : ${repoFullName}`);
   console.log(`   Issue      : #${issueNumber} "${issueTitle}"`);
   console.log(`   モデル     : ${AIDER_MODEL}`);
   console.log(`   開始時刻   : ${new Date().toISOString()}`);
   console.log(`${"═".repeat(60)}\n`);
+
+  if (DRY_RUN) {
+    // ── DRY_RUN: 実際のgit操作・Aider実行を行わず、疎通確認のみ行う ──────────
+    const branch = `demo/issue-${issueNumber}`;
+    console.log(`🧪 [DRY_RUN] git clone をスキップ (対象: ${repoFullName})`);
+    console.log(`🧪 [DRY_RUN] ブランチ作成をスキップ: ${branch}`);
+    console.log(`🧪 [DRY_RUN] Aider実行をスキップ`);
+    console.log(`   --model "${AIDER_MODEL}" --openai-api-base "${OLLAMA_API_BASE}"`);
+    console.log(`   プロンプト:\n${buildPrompt({ issueNumber, issueTitle, issueBody, issueAuthor })}`);
+    console.log(`🧪 [DRY_RUN] git push をスキップ`);
+    console.log(`🧪 [DRY_RUN] gh pr create をスキップ`);
+    console.log(`\n✅ [DRY_RUN] パイプライン完了 (実際の変更は行われていません): ${new Date().toISOString()}`);
+    return;
+  }
 
   // ① 一時作業ディレクトリ作成
   const workDir = mkdtempSync(join(tmpdir(), `aider-issue-${issueNumber}-`));
@@ -244,6 +277,7 @@ app.get("/", (c) =>
     model: AIDER_MODEL,
     runningJobs,
     maxConcurrent: MAX_CONCURRENT,
+    dryRun: DRY_RUN,
   })
 );
 
@@ -254,6 +288,7 @@ app.get("/health", (c) =>
     maxConcurrent: MAX_CONCURRENT,
     model: AIDER_MODEL,
     ollamaBase: OLLAMA_API_BASE,
+    dryRun: DRY_RUN,
   })
 );
 
@@ -303,6 +338,7 @@ console.log(`
 ║  MODEL         : ${AIDER_MODEL.slice(0, 22).padEnd(22)}║
 ║  OLLAMA_BASE   : ${OLLAMA_API_BASE.slice(0, 22).padEnd(22)}║
 ║  MAX_CONCURRENT: ${String(MAX_CONCURRENT).padEnd(22)}║
+║  DRY_RUN       : ${String(DRY_RUN).padEnd(22)}║
 ╚════════════════════════════════════════╝
 
 Cloudflare Tunnel でこのサーバーを公開してください:

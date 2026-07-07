@@ -1,0 +1,20 @@
+{
+  "name": "local-test",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "ローカル動作確認用のcommander CLIスクリプト集",
+  "scripts": {
+    "test:cf": "tsx src/test-cloudflare-flow.ts",
+    "test:gcp": "tsx src/test-gcp-flow.ts"
+  },
+  "dependencies": {
+    "@google-cloud/pubsub": "^4.5.0",
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsx": "^4.15.0",
+    "typescript": "^5.5.0"
+  }
+}

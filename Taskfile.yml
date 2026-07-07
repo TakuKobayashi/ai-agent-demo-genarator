@@ -29,6 +29,9 @@ tasks:
       - pnpm --filter ./gcp-webhook install
       - pnpm --filter ./cloudflare-workers install
       - pnpm --filter ./local-worker install
+      - pnpm --filter ./local-dev/cf-queue-mock install
+      - pnpm --filter ./local-dev/gcp-pubsub-relay install
+      - pnpm --filter ./local-test install
 
   lint:
     desc: 全パッケージの型チェック
@@ -36,6 +39,9 @@ tasks:
       - pnpm --filter ./gcp-webhook exec tsc --noEmit
       - pnpm --filter ./cloudflare-workers exec tsc --noEmit
       - pnpm --filter ./local-worker exec tsc --noEmit
+      - pnpm --filter ./local-dev/cf-queue-mock exec tsc --noEmit
+      - pnpm --filter ./local-dev/gcp-pubsub-relay exec tsc --noEmit
+      - pnpm --filter ./local-test exec tsc --noEmit
       - tsc --noEmit -p tsconfig.root.json
 
   # ─────────────────────────────────────────────
@@ -168,3 +174,69 @@ tasks:
     dir: cloudflare-workers
     cmds:
       - pnpm wrangler tail {{.CF_WORKER_NAME}}
+
+  # ─────────────────────────────────────────────
+  # ローカル動作確認 (構成B: Cloudflare + ローカルLLM)
+  # ─────────────────────────────────────────────
+  dev:cf:up:
+    desc: 構成Bのローカル開発環境を起動 (cf-worker-dev / cf-queue-mock / local-gpu-worker)
+    cmds:
+      - docker compose -f docker-compose.dev.cloudflare.yml up
+
+  dev:cf:down:
+    desc: 構成Bのローカル開発環境を停止
+    cmds:
+      - docker compose -f docker-compose.dev.cloudflare.yml down
+
+  test:cf:dispatch:
+    desc: "[構成B] GitHub Actions → Cloudflare Worker /dispatch へダミーリクエストを送信"
+    cmds:
+      - tsx local-test/src/test-cloudflare-flow.ts dispatch {{.CLI_ARGS}}
+
+  test:cf:queue:
+    desc: "[構成B] Cloudflare Queues モックに直接ダミーメッセージを投入"
+    cmds:
+      - tsx local-test/src/test-cloudflare-flow.ts queue {{.CLI_ARGS}}
+
+  test:cf:worker:
+    desc: "[構成B] 自前GPUワーカー /run に直接ダミーリクエストを送信"
+    cmds:
+      - tsx local-test/src/test-cloudflare-flow.ts worker {{.CLI_ARGS}}
+
+  test:cf:e2e:
+    desc: "[構成B] 一気通貫のダミーリクエストテスト (dispatch → Queue → Worker)"
+    cmds:
+      - tsx local-test/src/test-cloudflare-flow.ts e2e {{.CLI_ARGS}}
+
+  # ─────────────────────────────────────────────
+  # ローカル動作確認 (構成A: Google Cloud)
+  # ─────────────────────────────────────────────
+  dev:gcp:up:
+    desc: 構成Aのローカル開発環境を起動 (pubsub-emulator / gcp-webhook-dev / gcp-pubsub-relay / adk-worker-dev)
+    cmds:
+      - docker compose -f docker-compose.dev.gcp.yml up
+
+  dev:gcp:down:
+    desc: 構成Aのローカル開発環境を停止
+    cmds:
+      - docker compose -f docker-compose.dev.gcp.yml down
+
+  test:gcp:webhook:
+    desc: "[構成A] 署名付きダミーGitHub Webhookをgcp-webhook /webhook へ送信"
+    cmds:
+      - tsx local-test/src/test-gcp-flow.ts webhook {{.CLI_ARGS}}
+
+  test:gcp:pubsub:
+    desc: "[構成A] Pub/Subエミュレータに直接ダミーメッセージをパブリッシュ"
+    cmds:
+      - tsx local-test/src/test-gcp-flow.ts pubsub {{.CLI_ARGS}}
+
+  test:gcp:worker:
+    desc: "[構成A] ADKワーカー /worker に直接ダミーリクエストを送信"
+    cmds:
+      - tsx local-test/src/test-gcp-flow.ts worker {{.CLI_ARGS}}
+
+  test:gcp:e2e:
+    desc: "[構成A] 一気通貫のダミーリクエストテスト (webhook → Pub/Sub → relay → Worker)"
+    cmds:
+      - tsx local-test/src/test-gcp-flow.ts e2e {{.CLI_ARGS}}

@@ -1,0 +1,129 @@
+# docker-compose.dev.gcp.yml
+#
+# 構成A (GitHub → Cloud Run Webhook → Pub/Sub → Cloud Run ADKワーカー)
+# のローカル開発・動作確認環境。
+#
+# 各サービスが別ポートで独立起動するため、パイプラインの各ホップを
+# 個別に確認したり、local-test/ のスクリプトでダミーリクエストを送って
+# 動作確認することができる。
+#
+# 重要な注意点:
+#   gcloud Pub/Sub エミュレータは Pull配信のみをサポートしており、
+#   本番の Push サブスクリプションのようにメッセージを自動配信できない。
+#   そのため gcp-pubsub-relay サービスが Pull → Push形式への変換ブリッジとして
+#   動作し、本番と同じ Push 配信フローをローカルで再現している。
+#
+# 使い方:
+#   docker compose -f docker-compose.dev.gcp.yml up
+#
+#   (別ターミナルで)
+#   tsx local-test/src/test-gcp-flow.ts webhook --issue-number 1
+#   tsx local-test/src/test-gcp-flow.ts pubsub  --issue-number 2
+#   tsx local-test/src/test-gcp-flow.ts worker  --issue-number 3
+#   tsx local-test/src/test-gcp-flow.ts e2e     --issue-number 4
+#
+# デフォルトで DRY_RUN=true になっているため、実際のGit操作・GitHub PR作成・
+# Gemini ADKの実行は行われず、HTTP層とPub/Subの疎通確認のみが行われる。
+# (Gemini ADKはPythonパッケージと実際のGemini API認証が必要なため、
+#  ローカルでの疎通確認では対象外としている)
+#
+# ポート割り当て:
+#   8085 : pubsub-emulator   (Pub/Sub エミュレータ)
+#   8080 : gcp-webhook-dev   (Cloud Run Webhookレシーバー ローカルサーバー)
+#   8086 : gcp-pubsub-relay  (Pull→Push配信ブリッジ / ヘルスチェック用)
+#   8081 : adk-worker-dev    (ADKエージェントワーカー ローカルサーバー)
+
+services:
+  # ─── ① Pub/Sub エミュレータ (Cloudflare Queues 相当) ─────────────────────
+  pubsub-emulator:
+    image: gcr.io/google.com/cloudsdktool/cloud-sdk:emulators
+    container_name: pubsub-emulator
+    ports:
+      - "8085:8085"
+    command: >
+      gcloud beta emulators pubsub start
+      --host-port=0.0.0.0:8085
+      --project=local-dev-project
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8085"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ─── ② Cloud Run Webhookレシーバー ローカルサーバー (Cloudflare Workers相当) ─
+  gcp-webhook-dev:
+    image: node:20-slim
+    container_name: gcp-webhook-dev
+    working_dir: /app/gcp-webhook
+    volumes:
+      - ./gcp-webhook:/app/gcp-webhook
+      - gcp_webhook_node_modules:/app/gcp-webhook/node_modules
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      GCP_PROJECT: local-dev-project
+      PUBSUB_TOPIC: github-issues
+      PUBSUB_EMULATOR_HOST: pubsub-emulator:8085
+      # ローカル開発時は Secret Manager を使わずこの値を直接使用する
+      GITHUB_WEBHOOK_SECRET: local-dev-webhook-secret
+    command: sh -c "npm install -g pnpm tsx && pnpm install && pnpm dev"
+    depends_on:
+      pubsub-emulator:
+        condition: service_healthy
+
+  # ─── ③ Pull→Push配信ブリッジ (ローカル開発専用) ──────────────────────────
+  # Pub/Subエミュレータは Push配信非対応のため、
+  # Pullしたメッセージを本番と同じPush形式に変換してADKワーカーへ転送する
+  gcp-pubsub-relay:
+    image: node:20-slim
+    container_name: gcp-pubsub-relay
+    working_dir: /app/local-dev/gcp-pubsub-relay
+    volumes:
+      - ./local-dev/gcp-pubsub-relay:/app/local-dev/gcp-pubsub-relay
+      - gcp_pubsub_relay_node_modules:/app/local-dev/gcp-pubsub-relay/node_modules
+    ports:
+      - "8086:8086"
+    environment:
+      PORT: "8086"
+      GCP_PROJECT: local-dev-project
+      PUBSUB_TOPIC: github-issues
+      PUBSUB_SUBSCRIPTION: github-issues-worker-sub
+      PUBSUB_EMULATOR_HOST: pubsub-emulator:8085
+      ADK_WORKER_ENDPOINT: http://adk-worker-dev:8081
+    command: sh -c "npm install -g pnpm tsx && pnpm install && pnpm start"
+    depends_on:
+      pubsub-emulator:
+        condition: service_healthy
+      adk-worker-dev:
+        condition: service_started
+
+  # ─── ④ ADKエージェントワーカー ローカルサーバー (自前GPUサーバー相当) ────
+  adk-worker-dev:
+    image: node:20-slim
+    container_name: adk-worker-dev
+    working_dir: /app
+    volumes:
+      - ./src:/app/src
+      - ./gcp-webhook/src:/app/gcp-webhook/src
+      - ./package.json:/app/package.json
+      - ./tsconfig.worker.json:/app/tsconfig.worker.json
+      - adk_worker_node_modules:/app/node_modules
+    ports:
+      - "8081:8081"
+    environment:
+      PORT: "8081"
+      HTTP_MODE: "true"
+      AGENT_MODE: GEMINI_ADK
+      GCP_PROJECT: local-dev-project
+      GEMINI_MODEL: gemini-2.0-flash
+      GITHUB_TOKEN: dummy-token-not-used-in-dry-run
+      # true: git操作・ADK実行を全てスキップしHTTP層の疎通のみ確認 (デフォルト)
+      # false: 実際にgit clone/push/PR作成・Gemini ADKを実行 (要 実GCP認証)
+      DRY_RUN: "true"
+    command: sh -c "npm install -g pnpm tsx && pnpm install && tsx src/worker-entrypoint.ts"
+
+volumes:
+  gcp_webhook_node_modules:
+  gcp_pubsub_relay_node_modules:
+  adk_worker_node_modules:

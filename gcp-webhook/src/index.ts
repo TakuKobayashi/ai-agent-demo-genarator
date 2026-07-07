@@ -79,6 +79,19 @@ async function getSecret(name: string): Promise<string> {
   return value;
 }
 
+/**
+ * GITHUB_WEBHOOK_SECRET を解決する。
+ * ローカル開発時は環境変数を優先し、実GCP認証なしでの動作確認を可能にする
+ * (src/worker-entrypoint.ts の resolveGithubToken() と同じパターン)。
+ * 本番 (Cloud Run) では環境変数を設定しないため、自動的にSecret Managerから取得される。
+ */
+async function resolveWebhookSecret(): Promise<string> {
+  if (process.env["GITHUB_WEBHOOK_SECRET"]) {
+    return process.env["GITHUB_WEBHOOK_SECRET"];
+  }
+  return getSecret("GITHUB_WEBHOOK_SECRET");
+}
+
 // ─── Webhook 署名検証 ─────────────────────────────────────────────────────────
 
 function verifySignature(rawBody: string, signature: string, secret: string): boolean {
@@ -121,7 +134,7 @@ app.post("/webhook", async (c) => {
 
   let webhookSecret: string;
   try {
-    webhookSecret = await getSecret("GITHUB_WEBHOOK_SECRET");
+    webhookSecret = await resolveWebhookSecret();
   } catch (err) {
     console.error("GITHUB_WEBHOOK_SECRET の取得に失敗:", err);
     return c.json({ error: "内部エラー" }, 500);
