@@ -6,27 +6,22 @@
   "scripts": {
     "install:all": "pnpm install && pnpm --filter ./gcp-webhook install && pnpm --filter ./cloudflare-workers install && pnpm --filter ./local-worker install && pnpm --filter ./local-dev/cf-queue-mock install && pnpm --filter ./local-dev/gcp-pubsub-relay install && pnpm --filter ./local-test install",
     "lint": "pnpm --filter ./gcp-webhook exec tsc --noEmit && pnpm --filter ./cloudflare-workers exec tsc --noEmit && pnpm --filter ./local-worker exec tsc --noEmit && pnpm --filter ./local-dev/cf-queue-mock exec tsc --noEmit && pnpm --filter ./local-dev/gcp-pubsub-relay exec tsc --noEmit && pnpm --filter ./local-test exec tsc --noEmit && tsc --noEmit -p tsconfig.root.json && tsc --noEmit -p tsconfig.worker.json",
-
     "dev:cf": "docker compose -f docker-compose.dev.cloudflare.yml up",
     "dev:cf:down": "docker compose -f docker-compose.dev.cloudflare.yml down",
     "dev:gcp": "docker compose -f docker-compose.dev.gcp.yml up",
     "dev:gcp:down": "docker compose -f docker-compose.dev.gcp.yml down",
     "dev:prod-like": "docker compose -f docker-compose.local.yml up -d",
     "dev:prod-like:down": "docker compose -f docker-compose.local.yml down",
-
     "worker:dev": "cross-env PORT=8091 HTTP_MODE=true AGENT_MODE=GEMINI_ADK GCP_PROJECT=local-dev-project GEMINI_MODEL=gemini-2.0-flash GITHUB_TOKEN=dummy-token-not-used-in-dry-run DRY_RUN=true tsx src/worker-entrypoint.ts",
     "worker:dev:aider": "cross-env PORT=8091 HTTP_MODE=true AGENT_MODE=LOCAL_AIDER GCP_PROJECT=local-dev-project GITHUB_TOKEN=dummy-token-not-used-in-dry-run DRY_RUN=true tsx src/worker-entrypoint.ts",
-
     "test:cf:dispatch": "pnpm --filter ./local-test run test:cf:dispatch --",
     "test:cf:queue": "pnpm --filter ./local-test run test:cf:queue --",
     "test:cf:worker": "pnpm --filter ./local-test run test:cf:worker --",
     "test:cf:e2e": "pnpm --filter ./local-test run test:cf:e2e --",
-
     "test:gcp:webhook": "pnpm --filter ./local-test run test:gcp:webhook --",
     "test:gcp:pubsub": "pnpm --filter ./local-test run test:gcp:pubsub --",
     "test:gcp:worker": "pnpm --filter ./local-test run test:gcp:worker --",
     "test:gcp:e2e": "pnpm --filter ./local-test run test:gcp:e2e --",
-
     "deploy:gcp": "task gcp:deploy:all",
     "deploy:cf": "tsx scripts/deploy.ts cf:deploy"
   },
@@ -36,6 +31,7 @@
     "hono": "^4.4.0"
   },
   "devDependencies": {
+    "@go-task/cli": "^3.52.0",
     "@types/node": "^20.14.0",
     "commander": "^12.1.0",
     "cross-env": "^7.0.3",
