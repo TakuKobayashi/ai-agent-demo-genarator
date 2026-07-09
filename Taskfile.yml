@@ -1,5 +1,12 @@
 version: "3"
 
+# .env.local (優先) または .env から環境変数を読み込む。
+# これにより下の vars: セクションの {{.GCP_PROJECT}} などが
+# .env.local に書いた実際の値を自動的に拾うようになる。
+# (このdotenv宣言がないと、Taskfileは.envファイルを一切参照せず、
+#  常に下記の | default "..." のプレースホルダーが使われてしまう)
+dotenv: ['.env.local', '.env']
+
 vars:
   GCP_PROJECT: '{{.GCP_PROJECT | default "your-gcp-project-id"}}'
   GCP_REGION: '{{.GCP_REGION | default "asia-northeast1"}}'
@@ -87,6 +94,14 @@ tasks:
 
   gcp:setup:
     desc: GCPの初期リソースを一括作成
+    preconditions:
+      - sh: '[ "{{.GCP_PROJECT}}" != "your-gcp-project-id" ]'
+        msg: |
+          ❌ GCP_PROJECT が未設定です (プレースホルダーのままです)。
+             .env.local に実際のGCPプロジェクトIDを設定してください:
+               GCP_PROJECT=あなたのプロジェクトID
+             プロジェクトIDの確認方法・作成方法は README.md の
+             「GCPの初期セットアップ (Google Cloud Console)」を参照してください。
     cmds:
       - tsx scripts/deploy.ts gcp:setup
         --project {{.GCP_PROJECT}}
@@ -97,6 +112,9 @@ tasks:
   gcp:deploy:webhook:
     desc: WebhookレシーバーをCloud Runにデプロイ
     deps: [docker:build:webhook]
+    preconditions:
+      - sh: '[ "{{.GCP_PROJECT}}" != "your-gcp-project-id" ]'
+        msg: "❌ GCP_PROJECT が未設定です。.env.local に GCP_PROJECT=あなたのプロジェクトID を設定してください (README.md 参照)"
     cmds:
       - docker push {{.WEBHOOK_IMAGE}}:latest
       - tsx scripts/deploy.ts gcp:deploy-webhook
@@ -109,6 +127,9 @@ tasks:
   gcp:deploy:worker:
     desc: ADKエージェントワーカーをCloud Runにデプロイ
     deps: [docker:build:worker]
+    preconditions:
+      - sh: '[ "{{.GCP_PROJECT}}" != "your-gcp-project-id" ]'
+        msg: "❌ GCP_PROJECT が未設定です。.env.local に GCP_PROJECT=あなたのプロジェクトID を設定してください (README.md 参照)"
     cmds:
       - docker push {{.WORKER_IMAGE}}:latest
       - tsx scripts/deploy.ts gcp:deploy-worker

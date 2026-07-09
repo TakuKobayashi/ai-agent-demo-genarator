@@ -252,6 +252,100 @@ task cf:deploy
 
 ### 構成A: Google Cloud版
 
+構成Aをデプロイするには、事前にGoogle Cloud側でプロジェクトの作成・請求先の紐付けが必要です。
+`task gcp:setup` は各種APIの有効化などを自動で行いますが、**プロジェクトの作成と請求先アカウントの紐付けだけは手動**です(危険な操作のため自動化していません)。
+
+#### ① Google Cloud プロジェクトを作成する
+
+1. [Google Cloud Console](https://console.cloud.google.com/) にアクセスし、Googleアカウントでログイン
+2. 画面上部のプロジェクト選択メニュー →「新しいプロジェクト」
+3. プロジェクト名を入力 (表示名。日本語可、あとから変更可)
+4. **プロジェクトID** を確認・メモする — これが `.env.local` の `GCP_PROJECT` に設定する値
+   - 自動生成されるが、「編集」で自分で指定することも可能
+   - 一度作成すると**変更不可**。世界で一意。6〜30文字の英小文字・数字・ハイフンのみ
+   - 「プロジェクト**名**」と「プロジェクト**ID**」は別物。**必ずIDの方を使うこと**(今回のエラーもここが原因になりがち)
+5. 「作成」をクリック
+
+既存プロジェクトのIDを確認・一覧したい場合:
+```bash
+gcloud projects list
+```
+
+#### ② 請求先アカウント (Billing) を紐付ける
+
+Cloud Run / Pub/Sub / Artifact Registry などには無料枠がありますが、**請求先アカウントが紐付いていないとAPIの有効化自体ができません**。
+
+1. Console左メニュー →「お支払い」
+2. 対象プロジェクトに請求先アカウントをリンク (未作成の場合はクレジットカード登録が必要)
+3. リンク済みか確認: 「お支払い」画面で対象プロジェクトに請求先アカウント名が表示されていればOK
+
+#### ③ 有効化されるAPI (参考)
+
+`task gcp:setup` が下記APIを自動で有効化するため、手動で個別に有効化する必要はない。参考情報として掲載する。
+
+| API | 用途 |
+|---|---|
+| Cloud Run Admin API (`run.googleapis.com`) | Webhookレシーバー・ADKワーカーのデプロイ先 |
+| Cloud Pub/Sub API (`pubsub.googleapis.com`) | Issue受信→ワーカー起動のキュー |
+| Artifact Registry API (`artifactregistry.googleapis.com`) | Dockerイメージの保管 |
+| Secret Manager API (`secretmanager.googleapis.com`) | GitHubトークン・Webhookシークレットの保管 |
+| Cloud Build API (`cloudbuild.googleapis.com`) | CI/CDパイプライン |
+| IAM API (`iam.googleapis.com`) | サービスアカウントの権限管理 |
+| Eventarc API (`eventarc.googleapis.com`) | イベント駆動連携 |
+
+手動でConsoleから有効化したい場合は「APIとサービス」→「ライブラリ」→ 上記API名で検索 →「有効にする」。
+
+#### ④ gcloud CLI のセットアップ
+
+```bash
+# ブラウザでログイン
+gcloud auth login
+
+# デフォルトプロジェクトを設定 (以後の gcloud コマンドの対象になる)
+gcloud config set project <あなたのプロジェクトID>
+
+# Node.jsのクライアントライブラリ (Secret Manager / Pub/Sub 等) が使う認証情報を設定
+gcloud auth application-default login
+
+# Dockerイメージpush用の認証 (docker:build:webhook / worker で使用)
+gcloud auth configure-docker asia-northeast1-docker.pkg.dev
+```
+
+#### ⑤ 必要な権限
+
+デプロイを実行するGoogleアカウントには、対象プロジェクトで以下のいずれかの権限が必要。
+
+- 手早く進めたい場合: **オーナー (`roles/owner`)**
+- 最小権限にしたい場合: 以下をまとめて付与
+  - `roles/run.admin` (Cloud Run)
+  - `roles/pubsub.admin` (Pub/Sub)
+  - `roles/artifactregistry.admin` (Artifact Registry)
+  - `roles/secretmanager.admin` (Secret Manager)
+  - `roles/iam.serviceAccountAdmin` (サービスアカウント作成)
+  - `roles/iam.securityAdmin` (IAMポリシーのbinding付与)
+  - `roles/serviceusage.serviceUsageAdmin` (API有効化)
+  - `roles/cloudbuild.builds.editor` (Cloud Build)
+
+個人の検証目的であれば、オーナー権限で進めるのが簡単。
+
+#### ⑥ .env.local に設定
+
+```bash
+cp .env.example .env.local
+```
+`.env.local` を開き、`GCP_PROJECT` に①で確認した**実際のプロジェクトID**を設定する:
+```
+GCP_PROJECT=あなたのプロジェクトID
+```
+
+> **重要**: `Taskfile.yml` は `.env.local` (無ければ `.env`) を自動的に読み込む。
+> `GCP_PROJECT` を設定せずに `task gcp:setup` 等を実行すると、
+> プレースホルダーの `your-gcp-project-id` のまま実行され、
+> 存在しないプロジェクトとして扱われてエラーになる
+> (下記「トラブルシューティング」参照)。
+
+#### デプロイ
+
 ```bash
 task gcp:setup    # API有効化 / Pub/Sub / Artifact Registry
 # Secret Manager にトークン登録
@@ -262,3 +356,31 @@ task gcp:deploy:all
 Cloud Build トリガーをコンソールで2本設定:
 - mainブランチ push → `cloudbuild/cloudbuild.yaml`
 - PR作成 → `cloudbuild/cloudbuild.pr.yaml`
+
+### トラブルシューティング (構成A)
+
+#### `Project 'your-gcp-project-id' not found or permission denied` というエラーが出る
+
+`.env.local` の `GCP_PROJECT` が未設定か、プレースホルダーのままになっている。
+上記①・⑥の手順で実際のプロジェクトIDを設定すること。
+`gcp:setup` / `gcp:deploy:webhook` / `gcp:deploy:worker` は、この状態のままだと
+実行前に日本語のエラーメッセージで停止するようになっている
+(それでもこのエラーが出る場合は `.env.local` の保存やタイポを再確認)。
+
+#### `does not have permission to access projects instance` というエラーが出る
+
+以下のいずれかが原因:
+- プロジェクトIDのタイポ、あるいはプロジェクト**名**とプロジェクト**ID**の混同 (①を参照)
+- `gcloud auth login` で使っているアカウントに、そのプロジェクトへのアクセス権がない (⑤を参照)
+- プロジェクトがまだ作成されていない (①を参照)
+
+現在ログイン中のアカウント・プロジェクト一覧の確認:
+```bash
+gcloud auth list
+gcloud projects list
+```
+
+#### `FAILED_PRECONDITION` など、請求関連のエラーが出る
+
+②の請求先アカウントの紐付けができていない。Console →「お支払い」から紐付けること。
+
