@@ -1,32 +1,46 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Dockerfile.webhook
 # Cloud Run: GitHub Webhookレシーバー (軽量Node.jsイメージ)
+#
+# 注意: このプロジェクトは pnpm workspace (ルートに単一の pnpm-lock.yaml) 構成。
+# gcp-webhook ディレクトリ単体には pnpm-lock.yaml が存在しないため、
+# `--frozen-lockfile` でのインストールにはワークスペース全体の
+# マニフェスト (pnpm-workspace.yaml + 各メンバーのpackage.json) が必要になる。
 # ─────────────────────────────────────────────────────────────────────────────
 FROM node:20-alpine AS builder
 
 WORKDIR /app
 RUN npm install -g pnpm
 
-COPY gcp-webhook/package.json gcp-webhook/pnpm-lock.yaml* ./
+# ワークスペース全体のマニフェストをコピー (依存解決に必要。ソースコードはまだコピーしない)
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
+COPY gcp-webhook/package.json ./gcp-webhook/
+COPY cloudflare-workers/package.json ./cloudflare-workers/
+COPY local-worker/package.json ./local-worker/
+COPY local-dev/cf-queue-mock/package.json ./local-dev/cf-queue-mock/
+COPY local-dev/gcp-pubsub-relay/package.json ./local-dev/gcp-pubsub-relay/
+COPY local-test/package.json ./local-test/
+
 RUN pnpm install --frozen-lockfile
 
-COPY gcp-webhook/src ./src
-COPY gcp-webhook/tsconfig.json ./
-RUN pnpm exec tsc
+# gcp-webhookのソースだけをコピーしてビルド
+COPY gcp-webhook/src ./gcp-webhook/src
+COPY gcp-webhook/tsconfig.json ./gcp-webhook/tsconfig.json
+RUN pnpm --filter ./gcp-webhook run build
 
 # ─── Runtime ─────────────────────────────────────────────────────────────────
 FROM node:20-alpine AS runtime
 
 WORKDIR /app
-RUN npm install -g pnpm
 
-COPY --from=builder /app/package.json ./
-COPY --from=builder /app/dist ./dist
-COPY gcp-webhook/package.json ./
-RUN pnpm install --frozen-lockfile --prod
+# ワークスペース全体 (node_modulesのシンボリックリンク構造を含む) をそのまま持ち込む。
+# pnpmはパッケージ間をシンボリックリンクで解決するため、
+# gcp-webhookディレクトリだけを取り出すのではなくワークスペース全体をコピーするのが確実。
+COPY --from=builder /app ./
 
 ENV NODE_ENV=production
 ENV PORT=8080
 
 EXPOSE 8080
+WORKDIR /app/gcp-webhook
 CMD ["node", "dist/index.js"]

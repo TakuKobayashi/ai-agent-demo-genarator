@@ -359,6 +359,34 @@ Cloud Build トリガーをコンソールで2本設定:
 
 ### トラブルシューティング (構成A)
 
+#### `docker build` 時に `ERR_PNPM_OUTDATED_LOCKFILE` / `Cannot install with "frozen-lockfile"` というエラーが出る
+
+このプロジェクトは pnpm workspace 構成で、依存関係を解決する `pnpm-lock.yaml` は
+**リポジトリルートに1つだけ**存在する想定になっている。
+
+`gcp-webhook/` や `local-worker/` などのサブパッケージディレクトリの中で直接
+`npm install` や (`--filter` を使わない) `pnpm install` を実行すると、
+そのディレクトリの中にルートとは別の、単体の `pnpm-lock.yaml` が
+生成されてしまうことがある。これが存在すると、Dockerビルド時に
+ルートの `package.json` (依存関係) との内容不一致で `--frozen-lockfile` が失敗する。
+
+**対処法**: 該当ディレクトリに紛れ込んだ `pnpm-lock.yaml` を削除し、
+依存関係のインストールは必ずリポジトリルートから行う。
+
+```bash
+# 例: gcp-webhook配下に紛れ込んでいた場合
+rm gcp-webhook/pnpm-lock.yaml
+
+# ルートから正しくインストールし直す
+pnpm install
+# または
+pnpm run install:all
+```
+
+以後は `cd gcp-webhook && pnpm install` のようにサブディレクトリへ移動して
+直接インストールコマンドを実行せず、リポジトリルートから
+`pnpm install` (全体) または `pnpm --filter ./gcp-webhook <script>` を使うこと。
+
 #### `Project 'your-gcp-project-id' not found or permission denied` というエラーが出る
 
 `.env.local` の `GCP_PROJECT` が未設定か、プレースホルダーのままになっている。

@@ -6,3 +6,20 @@ dist/
 .wrangler/
 
 .pnpm-store/
+
+# このプロジェクトはpnpm workspace構成 (ルートに単一の pnpm-lock.yaml のみを置く)。
+# 各サブパッケージ配下で誤って `npm install` や `pnpm install` (--filter を使わず) を
+# 直接実行すると、そのディレクトリに単体の pnpm-lock.yaml が生成され、
+# ルートのlockfileと矛盾してDockerビルドが壊れる原因になるため無視する。
+# 依存関係のインストールは常にリポジトリルートから
+# `pnpm install` または `pnpm --filter ./<package> ...` を使うこと。
+gcp-webhook/pnpm-lock.yaml
+cloudflare-workers/pnpm-lock.yaml
+local-worker/pnpm-lock.yaml
+local-dev/*/pnpm-lock.yaml
+local-test/pnpm-lock.yaml
+gcp-webhook/package-lock.json
+cloudflare-workers/package-lock.json
+local-worker/package-lock.json
+local-dev/*/package-lock.json
+local-test/package-lock.json

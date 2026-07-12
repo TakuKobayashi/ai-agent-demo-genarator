@@ -2,6 +2,10 @@
 # Dockerfile.local-worker
 # 自前GPUサーバー上で動かすAiderワーカー
 # 起動後は Cloudflare Tunnel で外部公開する
+#
+# 注意: このプロジェクトは pnpm workspace (ルートに単一の pnpm-lock.yaml) 構成。
+# `--frozen-lockfile` でのインストールにはワークスペース全体の
+# マニフェスト (pnpm-workspace.yaml + 各メンバーのpackage.json) が必要になる。
 # ─────────────────────────────────────────────────────────────────────────────
 FROM node:20-slim
 
@@ -41,17 +45,26 @@ RUN pip install --no-cache-dir aider-chat && pip cache purge
 # ── アプリケーション ──────────────────────────────────────────────────────
 WORKDIR /app
 
-COPY local-worker/package.json local-worker/pnpm-lock.yaml* ./local-worker/
-COPY cloudflare-workers/src/index.ts ./cloudflare-workers/src/
+# ワークスペース全体のマニフェストをコピー (依存解決に必要。ソースコードはまだコピーしない)
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
+COPY gcp-webhook/package.json ./gcp-webhook/
+COPY cloudflare-workers/package.json ./cloudflare-workers/
+COPY local-worker/package.json ./local-worker/
+COPY local-dev/cf-queue-mock/package.json ./local-dev/cf-queue-mock/
+COPY local-dev/gcp-pubsub-relay/package.json ./local-dev/gcp-pubsub-relay/
+COPY local-test/package.json ./local-test/
 
-RUN cd local-worker && pnpm install --frozen-lockfile --prod
+RUN pnpm install --frozen-lockfile --prod
 
+# local-workerのソースだけをコピー
+# (local-worker/src/server.ts は cloudflare-workers の型に依存しないよう
+#  独立した型定義を持っているため、cloudflare-workers側のソースは不要)
 COPY local-worker/src/ ./local-worker/src/
 
 RUN git config --global user.email "aider-agent@bot.local" \
     && git config --global user.name "Aider AI Agent"
 
-EXPOSE 3000
+EXPOSE 3434
 
 # HTTPサーバーとして起動 (Ollamaは別コンテナまたはホストで起動済み前提)
 CMD ["tsx", "local-worker/src/server.ts"]

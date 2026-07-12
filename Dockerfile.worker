@@ -2,6 +2,10 @@
 # Dockerfile.worker
 # Cloud Run / ローカルGPUサーバー: ADKエージェントワーカー
 # 内包ツール: git, gh (GitHub CLI), Python (aider), Node.js (tsx / ADK)
+#
+# 注意: このプロジェクトは pnpm workspace (ルートに単一の pnpm-lock.yaml) 構成。
+# `--frozen-lockfile` でのインストールにはワークスペース全体の
+# マニフェスト (pnpm-workspace.yaml + 各メンバーのpackage.json) が必要になる。
 # ─────────────────────────────────────────────────────────────────────────────
 FROM node:20-slim AS base
 
@@ -29,7 +33,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 # ── pnpm + tsx ────────────────────────────────────────────────────────────
 RUN npm install -g pnpm tsx
 
-# ── Python仮想環境: Aider (LOCAL_AIIDERモード用) ─────────────────────────
+# ── Python仮想環境: Aider (LOCAL_AIDERモード用) ─────────────────────────
 ENV VENV_PATH=/opt/venv
 RUN python3 -m venv $VENV_PATH
 ENV PATH="$VENV_PATH/bin:$PATH"
@@ -38,7 +42,15 @@ RUN pip install --no-cache-dir aider-chat && pip cache purge
 # ── アプリケーション ──────────────────────────────────────────────────────
 WORKDIR /app
 
-COPY package.json pnpm-lock.yaml* ./
+# ワークスペース全体のマニフェストをコピー (依存解決に必要。ソースコードはまだコピーしない)
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
+COPY gcp-webhook/package.json ./gcp-webhook/
+COPY cloudflare-workers/package.json ./cloudflare-workers/
+COPY local-worker/package.json ./local-worker/
+COPY local-dev/cf-queue-mock/package.json ./local-dev/cf-queue-mock/
+COPY local-dev/gcp-pubsub-relay/package.json ./local-dev/gcp-pubsub-relay/
+COPY local-test/package.json ./local-test/
+
 RUN pnpm install --frozen-lockfile --prod
 
 COPY src/worker-entrypoint.ts ./src/
