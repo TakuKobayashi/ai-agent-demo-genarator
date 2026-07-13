@@ -14,6 +14,8 @@ export interface DummyIssueOptions {
   author: string;
   repo: string;
   branch: string;
+  // GitHub App のインストールIDを模擬する (undefinedなら静的GITHUB_TOKEN方式のテスト)
+  installationId?: number;
 }
 
 export const DEFAULT_DUMMY_ISSUE: DummyIssueOptions = {
@@ -23,10 +25,12 @@ export const DEFAULT_DUMMY_ISSUE: DummyIssueOptions = {
   author: "test-user",
   repo: "your-org/your-repo",
   branch: "main",
+  installationId: 12345678,
 };
 
 // ─── ① GitHub Webhook 形式 (gcp-webhook /webhook, Cloudflare /webhook互換) ────
 // GitHubが実際に送信する `issues` イベントのペイロード形式を再現する
+// (GitHub App経由の場合、installation フィールドが含まれる)
 
 export function buildGithubWebhookPayload(opts: DummyIssueOptions) {
   return {
@@ -44,6 +48,7 @@ export function buildGithubWebhookPayload(opts: DummyIssueOptions) {
       default_branch: opts.branch,
     },
     sender: { login: opts.author },
+    ...(opts.installationId ? { installation: { id: opts.installationId } } : {}),
   };
 }
 
@@ -81,6 +86,7 @@ export function buildQueueMessage(opts: DummyIssueOptions) {
     repoFullName: opts.repo,
     defaultBranch: opts.branch,
     triggeredAt: new Date().toISOString(),
+    installationId: opts.installationId,
   };
 }
 

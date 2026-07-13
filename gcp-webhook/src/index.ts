@@ -3,18 +3,33 @@
  * Cloud Run + Hono: GitHub Webhookレシーバー
  *
  * フロー:
- *   GitHub (Issue Opened) → POST /webhook
- *     → 署名検証 (HMAC-SHA256)
- *     → Pub/Sub パブリッシュ
+ *   GitHub App (Issue Opened) → POST /webhook
+ *     → 署名検証 (HMAC-SHA256。GitHub Appのwebhook secretを使用)
+ *     → 許可リポジトリチェック (ALLOWED_REPOS)
+ *     → Pub/Sub パブリッシュ (installation.id を含める)
  *     → 200 OK
+ *
+ * このWebhookは GitHub App 経由での利用を前提にしている。
+ * GitHub App は Any account にインストール可能な設定にできるため、
+ * 第三者が自分のリポジトリにインストールするだけで、
+ * GCPのアカウントやプロジェクトを一切作らずにこのシステムを使える。
+ * (実際のgit操作用トークンは、ここで受け取る installation.id を使って
+ *  ワーカー側がその場で短命なインストールトークンを発行するため、
+ *  リポジトリ管理者からPAT等を受け取る必要がない)
  *
  * 環境変数:
  *   GCP_PROJECT           - GCPプロジェクトID
  *   PUBSUB_TOPIC          - Pub/Subトピック名
  *   PORT                  - リッスンポート (デフォルト: 8090)
+ *   ALLOWED_REPOS         - 処理を許可するリポジトリのカンマ区切りリスト
+ *                            (例: "owner/repo1,owner/repo2")。
+ *                            未設定または空文字の場合は全リポジトリを許可する
+ *                            (GitHub Appを Any account にインストール可能にしている場合、
+ *                             想定外の第三者からの利用でCloud Run/Gemini APIの
+ *                             実行コストが発生するのを防ぐために設定を推奨)
  *
  * Secret Manager (最新バージョンを自動取得):
- *   GITHUB_WEBHOOK_SECRET - GitHub Webhookシークレット
+ *   GITHUB_WEBHOOK_SECRET - GitHub App の Webhook secret
  */
 
 import { serve } from "@hono/node-server";
@@ -41,6 +56,11 @@ interface GitHubIssuePayload {
     default_branch: string;
   };
   sender: { login: string };
+  // GitHub App経由のWebhookには、どのインストール(=どのアカウント/リポジトリへの
+  // インストールか)からのイベントかを示す installation.id が含まれる。
+  // このIDを使って、ワーカー側がそのリポジトリ専用の短命なアクセストークンを
+  // 都度発行する (PATを使わないための鍵となるフィールド)。
+  installation?: { id: number };
 }
 
 export interface IssueQueueMessage {
@@ -53,6 +73,9 @@ export interface IssueQueueMessage {
   repoFullName: string;
   defaultBranch: string;
   triggeredAt: string;
+  // GitHub App のインストールID。ワーカー側でインストールトークンを
+  // 発行する際に必要 (undefinedの場合は従来型の静的GITHUB_TOKEN方式にフォールバックする)
+  installationId?: number;
 }
 
 // ─── Secret Manager キャッシュ ────────────────────────────────────────────────
@@ -90,6 +113,28 @@ async function resolveWebhookSecret(): Promise<string> {
     return process.env["GITHUB_WEBHOOK_SECRET"];
   }
   return getSecret("GITHUB_WEBHOOK_SECRET");
+}
+
+// ─── 許可リポジトリチェック ───────────────────────────────────────────────────
+
+/**
+ * ALLOWED_REPOS 環境変数に基づき、そのリポジトリからのイベントを
+ * 処理してよいか判定する。
+ * ALLOWED_REPOS が未設定/空文字の場合は全リポジトリを許可する
+ * (GitHub Appのインストール先を限定している場合や、動作確認中は
+ *  設定しなくても構わないが、Any accountにインストール可能にしたまま
+ *  本番運用する場合は必ず設定すること)。
+ */
+function isRepoAllowed(repoFullName: string): boolean {
+  const allowList = process.env["ALLOWED_REPOS"];
+  if (!allowList || allowList.trim() === "") return true;
+
+  const allowed = allowList
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+
+  return allowed.includes(repoFullName);
 }
 
 // ─── Webhook 署名検証 ─────────────────────────────────────────────────────────
@@ -158,8 +203,26 @@ app.post("/webhook", async (c) => {
     return c.json({ skipped: true, reason: `action=${payload.action}` }, 200);
   }
 
-  const { issue, repository } = payload;
+  const { issue, repository, installation } = payload;
+
+  // ⑤.5 許可リポジトリチェック (第三者が勝手にAppをインストールした場合の
+  //     Cloud Run/Gemini APIの実行コスト濫用を防ぐ)
+  if (!isRepoAllowed(repository.full_name)) {
+    console.warn(`⛔ 許可されていないリポジトリからのリクエストを拒否: ${repository.full_name}`);
+    return c.json(
+      { skipped: true, reason: `repository '${repository.full_name}' is not in ALLOWED_REPOS` },
+      200
+    );
+  }
+
   console.log(`📩 Issue #${issue.number} 受信: "${issue.title}" in ${repository.full_name}`);
+  if (installation?.id) {
+    console.log(`   installation.id = ${installation.id}`);
+  } else {
+    console.warn(
+      `⚠️  installation.id がペイロードに含まれていません。GitHub App経由のWebhookか確認してください (静的GITHUB_TOKEN方式にフォールバックします)`
+    );
+  }
 
   // ⑥ Pub/Sub にパブリッシュ
   const topic = process.env["PUBSUB_TOPIC"];
@@ -178,6 +241,7 @@ app.post("/webhook", async (c) => {
     repoFullName: repository.full_name,
     defaultBranch: repository.default_branch,
     triggeredAt: new Date().toISOString(),
+    installationId: installation?.id,
   };
 
   try {
@@ -188,6 +252,7 @@ app.post("/webhook", async (c) => {
         issueNumber: String(issue.number),
         repo: repository.full_name,
         source: "github-webhook",
+        ...(installation?.id ? { installationId: String(installation.id) } : {}),
       },
     });
 

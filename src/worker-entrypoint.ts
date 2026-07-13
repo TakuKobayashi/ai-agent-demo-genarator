@@ -7,19 +7,33 @@
  * このスクリプトがエージェント処理を実行する。
  * ローカル実行時は環境変数を直接セットして tsx src/worker-entrypoint.ts で起動。
  *
+ * GitHubへのアクセストークンについて:
+ *   Webhookペイロードに installationId (GitHub Appのインストールを示すID) が
+ *   含まれている場合、そのインストール専用の短命 (約1時間) なアクセストークンを
+ *   その場で発行して使う (PAT不要・推奨)。
+ *   installationId が無い場合は、環境変数 or Secret Manager の
+ *   静的な GITHUB_TOKEN にフォールバックする (後方互換用・非推奨)。
+ *
  * 環境変数:
- *   AGENT_MODE          - "GEMINI_ADK" | "LOCAL_AIDER"
- *   GCP_PROJECT         - GCPプロジェクトID (GEMINI_ADK時)
- *   GEMINI_MODEL        - 使用するGeminiモデル (デフォルト: gemini-2.0-flash)
- *   AIDER_MODEL         - Aiderモデル名 (LOCAL_AIDER時)
- *   OLLAMA_API_BASE     - OllamaエンドポイントURL (LOCAL_AIDER時)
- *   GITHUB_TOKEN        - GitHub PAT または App Token
- *   GITHUB_REPO         - 対象リポジトリ (owner/repo)
- *   ISSUE_NUMBER        - Issue番号
- *   ISSUE_TITLE         - Issueタイトル
- *   ISSUE_BODY          - Issue本文
- *   ISSUE_AUTHOR        - Issue作成者
- *   DEFAULT_BRANCH      - デフォルトブランチ名 (デフォルト: main)
+ *   AGENT_MODE               - "GEMINI_ADK" | "LOCAL_AIDER"
+ *   GCP_PROJECT               - GCPプロジェクトID (GEMINI_ADK時)
+ *   GEMINI_MODEL               - 使用するGeminiモデル (デフォルト: gemini-2.0-flash)
+ *   AIDER_MODEL                - Aiderモデル名 (LOCAL_AIDER時)
+ *   OLLAMA_API_BASE            - OllamaエンドポイントURL (LOCAL_AIDER時)
+ *   GITHUB_APP_ID              - GitHub AppのApp ID (installationId利用時に必須)
+ *   GITHUB_APP_PRIVATE_KEY     - GitHub Appの秘密鍵 (PEM本文。ローカル開発用の環境変数指定。
+ *                                 本番ではSecret Managerから自動取得するため未設定でよい)
+ *   GITHUB_TOKEN                - GitHub PAT (フォールバック用。installationId利用時は不要)
+ *   GITHUB_REPO                 - 対象リポジトリ (owner/repo)
+ *   ISSUE_NUMBER                - Issue番号
+ *   ISSUE_TITLE                  - Issueタイトル
+ *   ISSUE_BODY                   - Issue本文
+ *   ISSUE_AUTHOR                 - Issue作成者
+ *   DEFAULT_BRANCH               - デフォルトブランチ名 (デフォルト: main)
+ *
+ * Secret Manager (最新バージョンを自動取得。GCP_PROJECT必須):
+ *   GITHUB_APP_PRIVATE_KEY     - GitHub Appの秘密鍵 (推奨方式)
+ *   GITHUB_TOKEN                - 静的PAT (フォールバック用。非推奨)
  *
  * Cloud Run経由 (Pub/Sub Push) の場合:
  *   POST /worker に { message: { data: base64(IssueQueueMessage) } } が届く
@@ -53,6 +67,9 @@ interface WorkerConfig {
   issueAuthor: string;
   defaultBranch: string;
   dryRun: boolean;
+  // GitHub App のインストールID。指定されていればインストールトークンを
+  // その場で発行する (推奨)。undefinedなら静的GITHUB_TOKEN方式にフォールバックする。
+  installationId?: number;
 }
 
 // ─── ユーティリティ ───────────────────────────────────────────────────────────
@@ -80,13 +97,68 @@ function requireEnv(key: string): string {
   return v;
 }
 
-// ─── Secret Manager からトークンを取得 ──────────────────────────────────────
+// ─── GitHub App 認証 (installationId がある場合はこちらを優先。推奨) ─────────
 
-async function resolveGithubToken(): Promise<string> {
-  // 環境変数に直接セットされている場合はそちらを優先
+let appPrivateKeyCache: string | null = null;
+
+/**
+ * GitHub Appの秘密鍵(PEM)を解決する。
+ * ローカル開発時は環境変数を優先し、実GCP認証なしでの動作確認を可能にする。
+ * 本番 (Cloud Run) では環境変数を設定しないため、自動的にSecret Managerから取得される。
+ */
+async function resolveAppPrivateKey(): Promise<string> {
+  if (appPrivateKeyCache) return appPrivateKeyCache;
+
+  if (process.env["GITHUB_APP_PRIVATE_KEY"]) {
+    appPrivateKeyCache = process.env["GITHUB_APP_PRIVATE_KEY"];
+    return appPrivateKeyCache;
+  }
+
+  const project = process.env["GCP_PROJECT"];
+  if (!project) throw new Error("GITHUB_APP_PRIVATE_KEY または GCP_PROJECT が必要です");
+
+  const { SecretManagerServiceClient } = await import("@google-cloud/secret-manager");
+  const client = new SecretManagerServiceClient();
+  const [version] = await client.accessSecretVersion({
+    name: `projects/${project}/secrets/GITHUB_APP_PRIVATE_KEY/versions/latest`,
+  });
+  const data = version.payload?.data;
+  if (!data) throw new Error("GITHUB_APP_PRIVATE_KEY シークレットが空です");
+  appPrivateKeyCache = typeof data === "string" ? data : Buffer.from(data).toString("utf-8");
+  return appPrivateKeyCache;
+}
+
+/**
+ * GitHub App のインストールIDを使って、そのインストール(=そのリポジトリ)
+ * 専用の短命 (約1時間) なアクセストークンをその場で発行する。
+ * これにより、PAT等の長期間有効な認証情報をSecret Managerに
+ * 保管する必要がなくなり、GCPアカウントを持たない第三者のリポジトリに対しても
+ * GitHub Appをインストールしてもらうだけでこのシステムを利用可能にできる。
+ */
+async function issueInstallationToken(installationId: number): Promise<string> {
+  const appId = process.env["GITHUB_APP_ID"];
+  if (!appId) {
+    throw new Error(
+      "GITHUB_APP_ID が未設定です (installationIdは受信しましたが、Appを特定できません)"
+    );
+  }
+  const privateKey = await resolveAppPrivateKey();
+
+  const { createAppAuth } = await import("@octokit/auth-app");
+  const auth = createAppAuth({ appId, privateKey });
+  const { token } = await auth({ type: "installation", installationId });
+
+  console.log(`🔑 GitHub App インストールトークンを発行しました (installationId=${installationId})`);
+  return token;
+}
+
+// ─── 静的トークンによる解決 (installationId が無い場合のフォールバック・非推奨) ─
+
+async function resolveStaticGithubToken(): Promise<string> {
+  // 環境変数に直接セットされている場合はそちらを優先 (ローカル開発用)
   if (process.env["GITHUB_TOKEN"]) return process.env["GITHUB_TOKEN"];
 
-  // Secret Manager から取得 (Cloud Run環境)
+  // Secret Manager から取得 (旧方式。静的PATを直接保管している場合)
   const project = process.env["GCP_PROJECT"];
   if (!project) throw new Error("GITHUB_TOKEN または GCP_PROJECT が必要です");
 
@@ -96,8 +168,28 @@ async function resolveGithubToken(): Promise<string> {
     name: `projects/${project}/secrets/GITHUB_TOKEN/versions/latest`,
   });
   const data = version.payload?.data;
-  if (!data) throw new Error("GITHUB_TOKEN シークレットが空です");
+  if (!data) {
+    throw new Error(
+      "GitHubトークンを解決できません: installationIdも無く、GITHUB_TOKEN (環境変数/Secret Manager) も未設定です"
+    );
+  }
   return typeof data === "string" ? data : Buffer.from(data).toString("utf-8");
+}
+
+/**
+ * GitHubトークンを解決する。優先順位:
+ *   1. installationId がある場合 → GitHub App のインストールトークンをその場で発行 (推奨)
+ *   2. 無い場合 → 環境変数 or Secret Manager の静的 GITHUB_TOKEN (後方互換・非推奨)
+ */
+async function resolveGithubToken(installationId?: number): Promise<string> {
+  if (installationId) {
+    return issueInstallationToken(installationId);
+  }
+
+  console.warn(
+    "⚠️  installationId が指定されていません。静的GITHUB_TOKEN方式にフォールバックします (GitHub Appの利用を推奨)"
+  );
+  return resolveStaticGithubToken();
 }
 
 // ─── 設定の組み立て ───────────────────────────────────────────────────────────
@@ -123,6 +215,7 @@ function buildConfig(msg?: IssueQueueMessage): WorkerConfig {
     issueAuthor: msg?.issueAuthor ?? (process.env["ISSUE_AUTHOR"] ?? "unknown"),
     defaultBranch: msg?.defaultBranch ?? (process.env["DEFAULT_BRANCH"] ?? "main"),
     dryRun: process.env["DRY_RUN"] === "true",
+    installationId: msg?.installationId,
   };
 }
 
@@ -408,13 +501,18 @@ async function processIssue(msg?: IssueQueueMessage): Promise<void> {
   console.log(`  リポジトリ : ${cfg.githubRepo}`);
   console.log(`  Issue      : #${cfg.issueNumber} "${cfg.issueTitle}"`);
   console.log(`  エージェント: ${cfg.agentMode}`);
+  console.log(`  認証方式   : ${cfg.installationId ? `GitHub App (installationId=${cfg.installationId})` : "静的GITHUB_TOKEN (非推奨)"}`);
   console.log(`  開始時刻   : ${new Date().toISOString()}`);
 
   if (cfg.dryRun) {
     // ── DRY_RUN: 実際のGCP認証・git操作・エージェント実行を一切行わず、
     //    HTTPリクエストの受信〜設定の組み立てまでの疎通確認のみ行う ──────────
     const branch = `demo/issue-${cfg.issueNumber}`;
-    console.log(`🧪 [DRY_RUN] GitHub Token解決 (Secret Manager) をスキップ`);
+    console.log(
+      cfg.installationId
+        ? `🧪 [DRY_RUN] GitHub App インストールトークン発行 (installationId=${cfg.installationId}) をスキップ`
+        : `🧪 [DRY_RUN] 静的GitHub Token解決 (Secret Manager) をスキップ`
+    );
     console.log(`🧪 [DRY_RUN] git clone をスキップ (対象: ${cfg.githubRepo})`);
     console.log(`🧪 [DRY_RUN] ブランチ作成をスキップ: ${branch}`);
     switch (cfg.agentMode) {
@@ -432,9 +530,10 @@ async function processIssue(msg?: IssueQueueMessage): Promise<void> {
     return;
   }
 
-  // GitHub Tokenの解決 (Secret Manager or 環境変数)
+  // GitHub Tokenの解決 (installationId があればGitHub Appのインストールトークン、
+  // 無ければ静的GITHUB_TOKENにフォールバック)
   if (!cfg.githubToken) {
-    cfg.githubToken = await resolveGithubToken();
+    cfg.githubToken = await resolveGithubToken(cfg.installationId);
   }
 
   const { repoDir, workDir } = setupRepo(cfg);

@@ -19,6 +19,12 @@ vars:
   GCP_PUBSUB_SUBSCRIPTION: '{{.GCP_PUBSUB_SUBSCRIPTION | default "github-issues-worker-sub"}}'
   # Artifact Registry
   GCP_ARTIFACT_REPO: '{{.GCP_ARTIFACT_REPO | default "devops-ai-agent"}}'
+  # GitHub App (PATを使わないための認証方式。.env.local で設定する)
+  GITHUB_APP_ID: '{{.GITHUB_APP_ID | default ""}}'
+  # 処理を許可するリポジトリのカンマ区切りリスト (owner/repo,owner/repo)。
+  # 空のままだとAppをインストールした全リポジトリを許可するので、
+  # Any accountにインストール可能にしている場合は設定を推奨。
+  ALLOWED_REPOS: '{{.ALLOWED_REPOS | default ""}}'
   # Docker
   WEBHOOK_IMAGE: '{{.GCP_REGION}}-docker.pkg.dev/{{.GCP_PROJECT}}/{{.GCP_ARTIFACT_REPO}}/webhook-receiver'
   WORKER_IMAGE: '{{.GCP_REGION}}-docker.pkg.dev/{{.GCP_PROJECT}}/{{.GCP_ARTIFACT_REPO}}/adk-agent-worker'
@@ -123,6 +129,7 @@ tasks:
         --service {{.GCP_WEBHOOK_SERVICE}}
         --image {{.WEBHOOK_IMAGE}}:latest
         --topic {{.GCP_PUBSUB_TOPIC}}
+        --allowed-repos "{{.ALLOWED_REPOS}}"
 
   gcp:deploy:worker:
     desc: ADKエージェントワーカーをCloud Runにデプロイ
@@ -130,6 +137,13 @@ tasks:
     preconditions:
       - sh: '[ "{{.GCP_PROJECT}}" != "your-gcp-project-id" ]'
         msg: "❌ GCP_PROJECT が未設定です。.env.local に GCP_PROJECT=あなたのプロジェクトID を設定してください (README.md 参照)"
+      - sh: '[ -n "{{.GITHUB_APP_ID}}" ]'
+        msg: |
+          ❌ GITHUB_APP_ID が未設定です。
+             .env.local に GitHub AppのApp IDを設定してください:
+               GITHUB_APP_ID=123456
+             GitHub Appの作成方法は README.md の
+             「GitHub Appを使った他リポジトリへの展開」を参照してください。
     cmds:
       - docker push {{.WORKER_IMAGE}}:latest
       - tsx scripts/deploy.ts gcp:deploy-worker
@@ -139,6 +153,7 @@ tasks:
         --image {{.WORKER_IMAGE}}:latest
         --topic {{.GCP_PUBSUB_TOPIC}}
         --subscription {{.GCP_PUBSUB_SUBSCRIPTION}}
+        --github-app-id {{.GITHUB_APP_ID}}
 
   gcp:deploy:all:
     desc: GCP全リソースをセットアップ&デプロイ

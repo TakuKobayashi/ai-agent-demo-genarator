@@ -347,15 +347,121 @@ GCP_PROJECT=あなたのプロジェクトID
 #### デプロイ
 
 ```bash
-task gcp:setup    # API有効化 / Pub/Sub / Artifact Registry
-# Secret Manager にトークン登録
+task gcp:setup    # API有効化 / Pub/Sub / Artifact Registry / Secret Manager
+# Webhookシークレットを登録 (値は下記「GitHub Appを使った他リポジトリへの展開」で決める)
 echo -n "your-webhook-secret" | gcloud secrets versions add GITHUB_WEBHOOK_SECRET --data-file=-
-echo -n "ghp_token"           | gcloud secrets versions add GITHUB_TOKEN --data-file=-
+# GitHub Appの秘密鍵を登録 (同じく下記セクションで作成する)
+gcloud secrets versions add GITHUB_APP_PRIVATE_KEY --data-file=path/to/private-key.pem
+```
+`.env.local` に `GITHUB_APP_ID` (下記で作成するGitHub AppのApp ID) を設定してから:
+```bash
 task gcp:deploy:all
 ```
 Cloud Build トリガーをコンソールで2本設定:
 - mainブランチ push → `cloudbuild/cloudbuild.yaml`
 - PR作成 → `cloudbuild/cloudbuild.pr.yaml`
+
+> このプロジェクトは元々、GitHubの個人アクセストークン(PAT)をSecret Managerに
+> 保管してgit操作を行う設計でしたが、**現在はGitHub Appを使う方式が標準**になっています。
+> PATを使わないことで、①長期間有効な強い権限のトークンを保管しなくて済む、
+> ②taptappunさん以外の第三者が自分のリポジトリに対してGCPアカウントを
+> 作ることなくこのシステムを使えるようになる、という2つの利点があります。
+> (旧来のPAT方式も後方互換のフォールバックとして残っていますが非推奨です)
+
+## GitHub Appを使った他リポジトリへの展開
+
+このシステムは GitHub App の「インストール」という仕組みを使うことで、
+**運営者(あなた)が一度だけGCP環境を用意すれば、他の誰かが自分のGCPアカウントを
+一切作らずに、自分のリポジトリでこのシステムを使えるようにする**ことができる。
+
+### 登場人物の整理
+
+| 役割 | やること |
+|---|---|
+| **運営者 (あなた)** | GCP環境を1つ持ち、GitHub Appを1つ作成する。秘密鍵を自分のSecret Managerに保管する |
+| **利用者(他の人)** | GitHub App のインストールページで「Install」を押すだけ。GCPのことは何も知らなくてよい |
+
+### 動作の仕組み (参考)
+
+1. 利用者がGitHub Appを自分のリポジトリにインストールする
+2. 利用者のリポジトリでIssueが作成されると、GitHub Appのwebhook設定に従って
+   運営者のCloud Run (`github-webhook-receiver`) にイベントが届く。
+   このとき、ペイロードに「どのインストールからのイベントか」を示す
+   `installation.id` が自動的に含まれる
+3. Webhookレシーバーがこの`installation.id`をPub/Subメッセージに含めて送る
+4. ADKワーカーが、運営者のGitHub App秘密鍵(Secret Manager保管)と
+   受け取った`installation.id`を使って、**そのリポジトリだけに使える・
+   約1時間で失効する**アクセストークンをその場で発行し、git push・PR作成を行う
+
+利用者からPAT等の情報を受け取る必要は一切ない。
+
+### ① GitHub App を作成する (運営者のみ・1回だけ)
+
+1. GitHubの自分のアカウント (または組織) の Settings → **Developer settings** → **GitHub Apps** → **New GitHub App**
+2. 以下を入力する
+
+   | 項目 | 値 |
+   |---|---|
+   | GitHub App name | 好きな名前 (例: `my-devops-ai-agent`。これがインストールURLに使われる) |
+   | Homepage URL | 何でもよい (例: このリポジトリのURL) |
+   | Webhook > Active | ✅ チェックする |
+   | Webhook URL | `task gcp:deploy:webhook` 実行後に出力される Webhook URL (`https://xxxx.a.run.app/webhook`) |
+   | Webhook secret | 適当なランダム文字列を生成して入力 (例: `openssl rand -hex 32`)。これが Secret Manager の `GITHUB_WEBHOOK_SECRET` になる |
+   | Permissions > Repository permissions > **Contents** | **Read and write** |
+   | Permissions > Repository permissions > **Pull requests** | **Read and write** |
+   | Permissions > Repository permissions > **Issues** | Read-only (必須ではないが推奨) |
+   | Subscribe to events | **Issues** にチェック |
+   | Where can this GitHub App be installed? | **Any account** (他リポジトリ/他ユーザーにも展開したい場合) |
+
+3. 「Create GitHub App」をクリック
+4. 作成後の画面で **App ID** をメモする (`.env.local` の `GITHUB_APP_ID` に使う)
+5. 「Generate a private key」をクリックし、`.pem` ファイルをダウンロードする
+
+### ② 秘密鍵とWebhookシークレットをGCPに登録する
+
+```bash
+# Webhookシークレット (①で決めたランダム文字列と同じ値)
+echo -n "①で決めたランダム文字列" | gcloud secrets versions add GITHUB_WEBHOOK_SECRET --data-file=- --project=<プロジェクトID>
+
+# GitHub Appの秘密鍵 (①でダウンロードした.pemファイルをそのまま渡す)
+gcloud secrets versions add GITHUB_APP_PRIVATE_KEY --data-file=path/to/private-key.pem --project=<プロジェクトID>
+```
+
+`.env.local` に App ID を設定する:
+```
+GITHUB_APP_ID=①でメモしたApp ID
+```
+
+### ③ (推奨) 許可リポジトリを制限する
+
+GitHub Appを「Any account」でインストール可能にすると、見知らぬ第三者が
+勝手にインストールしてCloud Run/Gemini APIの実行コストを消費させる可能性がある。
+これを防ぐため、利用を許可するリポジトリを制限できる:
+
+`.env.local` に追加:
+```
+ALLOWED_REPOS=owner1/repo1,owner2/repo2
+```
+
+設定後、Webhookレシーバーを再デプロイして反映する:
+```bash
+task gcp:deploy:webhook
+```
+
+新しい利用者を許可したくなったら、`ALLOWED_REPOS` にリポジトリを追加して
+同じコマンドで再デプロイすればよい。未設定 (空) の場合は全リポジトリを許可する。
+
+### ④ 利用者への案内
+
+利用者は、以下のURLを開いて「Install」を押すだけで使えるようになる
+(`<App名>` は①で決めた名前):
+```
+https://github.com/apps/<App名>/installations/new
+```
+
+利用者向けの説明・トラブルシューティングは、デモ用に用意した
+[demo-repo-README.md](https://github.com/TakuKobayashi/ai-agent-demo-genarator-demo-project)
+のような、利用者にそのまま渡せる簡潔なREADMEを別リポジトリに配置しておくとよい。
 
 ### トラブルシューティング (構成A)
 
@@ -411,4 +517,42 @@ gcloud projects list
 #### `FAILED_PRECONDITION` など、請求関連のエラーが出る
 
 ②の請求先アカウントの紐付けができていない。Console →「お支払い」から紐付けること。
+
+#### Issueを作成してもWebhookレシーバーに何も届かない (GitHub App利用時)
+
+以下を順に確認する:
+1. GitHub Appが対象リポジトリにインストールされているか (GitHub Appの設定画面 → Install App)
+2. GitHub Appの Webhook URL が、実際にデプロイした `github-webhook-receiver` のURLと一致しているか
+   (`task gcp:deploy:webhook` の出力、または `gcloud run services describe github-webhook-receiver ...` で再確認できる)
+3. GitHub Appの設定画面 → **Advanced** → **Recent Deliveries** で、実際にWebhookが送信され
+   どんなレスポンスが返っているかを確認する (署名エラーなら401、許可リポジトリ外なら200 skippedが返る)
+
+#### `署名が無効です` (401) が返る
+
+GitHub App の Webhook secret と、Secret Manager の `GITHUB_WEBHOOK_SECRET` の値が
+一致していない。GitHub Appの設定画面から Webhook secret を再設定するか、
+Secret Managerの値を再登録して揃えること:
+```bash
+echo -n "GitHub App設定画面と同じ値" | gcloud secrets versions add GITHUB_WEBHOOK_SECRET --data-file=- --project=<プロジェクトID>
+```
+
+#### `repository 'xxx/yyy' is not in ALLOWED_REPOS` としてスキップされる (200が返るのでエラーには見えない)
+
+意図的な仕様。`ALLOWED_REPOS` に対象リポジトリが含まれていない。
+運営者側で `.env.local` の `ALLOWED_REPOS` にリポジトリを追加し、
+`task gcp:deploy:webhook` で再デプロイすること。
+
+#### ワーカーのログに `GITHUB_APP_ID が未設定です` と出る
+
+ADKワーカー (`adk-agent-worker`) の環境変数に `GITHUB_APP_ID` が設定されていない。
+`.env.local` に `GITHUB_APP_ID` を設定してから `task gcp:deploy:worker` を再実行すること。
+
+#### PRの作成には成功するが、想定と違うリポジトリに作られる/認証エラーになる
+
+GitHub Appのインストールが複数リポジトリ・複数アカウントにまたがっている場合、
+`installation.id` は「そのインストール単位」を指す (1インストールが複数リポジトリを
+含むことがある)。発行されるトークンは、そのインストールが許可している
+リポジトリの範囲でのみ有効なため、通常は誤ったリポジトリを操作することはない。
+それでも問題が起きる場合は、GitHub App側の Repository access 設定
+(Only select repositories を推奨) を確認すること。
 

@@ -49,6 +49,7 @@ interface CommonIssueOpts {
   author: string;
   repo: string;
   branch: string;
+  installationId: string;
 }
 
 function addCommonIssueOptions(cmd: Command): Command {
@@ -58,7 +59,12 @@ function addCommonIssueOptions(cmd: Command): Command {
     .option("--body <body>", "Issue本文", DEFAULT_DUMMY_ISSUE.body)
     .option("--author <author>", "Issue作成者", DEFAULT_DUMMY_ISSUE.author)
     .option("--repo <owner/repo>", "対象リポジトリ", DEFAULT_DUMMY_ISSUE.repo)
-    .option("--branch <branch>", "デフォルトブランチ", DEFAULT_DUMMY_ISSUE.branch);
+    .option("--branch <branch>", "デフォルトブランチ", DEFAULT_DUMMY_ISSUE.branch)
+    .option(
+      "--installation-id <id>",
+      "GitHub Appのインストールid (模擬)。0を指定すると静的GITHUB_TOKEN方式のテストになる",
+      String(DEFAULT_DUMMY_ISSUE.installationId)
+    );
 }
 
 function toDummyIssueOptions(opts: CommonIssueOpts): DummyIssueOptions {
@@ -69,6 +75,7 @@ function toDummyIssueOptions(opts: CommonIssueOpts): DummyIssueOptions {
     author: opts.author,
     repo: opts.repo,
     branch: opts.branch,
+    installationId: Number(opts.installationId) || undefined,
   };
 }
 

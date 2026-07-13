@@ -80,7 +80,9 @@ program
     });
 
     // ④ Secret Manager のシークレット枠を作成 (値は別途設定)
-    for (const secretName of ["GITHUB_WEBHOOK_SECRET", "GITHUB_TOKEN"]) {
+    //    GITHUB_APP_PRIVATE_KEY: GitHub Appの秘密鍵を保管する (PAT不要方式)
+    //    GITHUB_TOKEN          : 後方互換用の予備 (GitHub Appを使わない場合のみ利用)
+    for (const secretName of ["GITHUB_WEBHOOK_SECRET", "GITHUB_APP_PRIVATE_KEY", "GITHUB_TOKEN"]) {
       run(`gcloud secrets create ${secretName} --replication-policy=automatic --project=${opts.project}`, {
         ignoreError: true,
       });
@@ -92,7 +94,10 @@ program
 次のステップ:
   1. Secret Manager にシークレットの値を設定してください:
      gcloud secrets versions add GITHUB_WEBHOOK_SECRET --data-file=- --project=${opts.project}
-     gcloud secrets versions add GITHUB_TOKEN --data-file=- --project=${opts.project}
+     gcloud secrets versions add GITHUB_APP_PRIVATE_KEY --data-file=path/to/private-key.pem --project=${opts.project}
+
+     (GITHUB_TOKEN はGitHub Appを使わない場合の後方互換用シークレットです。
+      GitHub Appを使う場合は値を設定しなくて構いません)
 
   2. task gcp:deploy:all を実行してください
 `);
@@ -108,7 +113,15 @@ program
   .requiredOption("--service <service>", "Cloud Runサービス名")
   .requiredOption("--image <image>", "コンテナイメージURI")
   .requiredOption("--topic <topic>", "Pub/Subトピック名")
-  .action((opts: { project: string; region: string; service: string; image: string; topic: string }) => {
+  .option(
+    "--allowed-repos <repos>",
+    "処理を許可するリポジトリのカンマ区切りリスト (owner/repo,owner/repo)。未指定なら全リポジトリ許可",
+    ""
+  )
+  .action((opts: {
+    project: string; region: string; service: string; image: string;
+    topic: string; allowedRepos: string;
+  }) => {
     section("Webhookレシーバー Cloud Run デプロイ");
 
     const sa = `${opts.service}-sa`;
@@ -125,6 +138,12 @@ program
     }
 
     // Cloud Run デプロイ
+    const envVars = [
+      `GCP_PROJECT=${opts.project}`,
+      `PUBSUB_TOPIC=${opts.topic}`,
+      `ALLOWED_REPOS=${opts.allowedRepos}`,
+    ].join(",");
+
     run([
       `gcloud run deploy ${opts.service}`,
       `--image=${opts.image}`,
@@ -132,7 +151,7 @@ program
       `--platform=managed`,
       `--allow-unauthenticated`,   // GitHub Webhookからの受信
       `--service-account=${saEmail}`,
-      `--set-env-vars=GCP_PROJECT=${opts.project},PUBSUB_TOPIC=${opts.topic}`,
+      `--set-env-vars=${envVars}`,
       `--memory=512Mi`,
       `--cpu=1`,
       `--concurrency=80`,
@@ -150,9 +169,9 @@ program
 ✅ Webhookレシーバーのデプロイ完了
 
 📌 Webhook URL: ${url}/webhook
-👉 このURLをGitHubリポジトリの Settings > Webhooks に設定してください
-   Content-Type: application/json
-   Events: Issues
+👉 このURLを GitHub App の Webhook URL に設定してください (GitHub App作成時、
+   または Settings > Developer settings > GitHub Apps > 該当App > General から変更可能)
+${opts.allowedRepos ? `🔒 許可リポジトリ: ${opts.allowedRepos}` : "⚠️  ALLOWED_REPOS が未設定のため、Appをインストールした全リポジトリからのリクエストを受け付けます"}
 `);
   });
 
@@ -167,9 +186,10 @@ program
   .requiredOption("--image <image>", "コンテナイメージURI")
   .requiredOption("--topic <topic>", "Pub/Subトピック名")
   .requiredOption("--subscription <subscription>", "Pub/Subサブスクリプション名")
+  .requiredOption("--github-app-id <id>", "GitHub AppのApp ID (installationトークン発行に必須)")
   .action((opts: {
     project: string; region: string; service: string;
-    image: string; topic: string; subscription: string;
+    image: string; topic: string; subscription: string; githubAppId: string;
   }) => {
     section("ADKエージェントワーカー Cloud Run デプロイ");
 
@@ -190,6 +210,12 @@ program
     run(`gcloud projects add-iam-policy-binding ${opts.project} --member="serviceAccount:${pubsubSa}" --role="roles/iam.serviceAccountTokenCreator"`);
 
     // Cloud Run デプロイ (no-allow-unauthenticated = Pub/Sub Pushのみ受け付ける)
+    const envVars = [
+      `GCP_PROJECT=${opts.project}`,
+      `AGENT_MODE=GEMINI_ADK`,
+      `GITHUB_APP_ID=${opts.githubAppId}`,
+    ].join(",");
+
     run([
       `gcloud run deploy ${opts.service}`,
       `--image=${opts.image}`,
@@ -197,7 +223,7 @@ program
       `--platform=managed`,
       `--no-allow-unauthenticated`,
       `--service-account=${saEmail}`,
-      `--set-env-vars=GCP_PROJECT=${opts.project},AGENT_MODE=GEMINI_ADK`,
+      `--set-env-vars=${envVars}`,
       `--memory=2Gi`,
       `--cpu=2`,
       `--timeout=3600`,         // エージェント実行に十分な時間
@@ -226,12 +252,14 @@ program
     console.log(`
 ✅ ADKエージェントワーカーのデプロイ完了
 
-アーキテクチャ:
-  GitHub Issue → Webhook (${serviceUrl}/webhook)
-               → Pub/Sub (${opts.topic})
-               → Cloud Run Worker (${serviceUrl}/worker)
-               → Gemini ADK Agent
-               → PR作成
+このサービスのURL: ${serviceUrl}
+  (Pub/Sub Pushサブスクリプション経由でのみ呼び出される内部サービスです。
+   GitHubに設定するWebhook URLではありません。Webhook URLは
+   'gcp:deploy-webhook' コマンド実行時の出力を参照してください)
+
+Pub/Subサブスクリプション '${opts.subscription}' の push-endpoint を
+  ${serviceUrl}/worker
+に設定しました。
 `);
   });
 
